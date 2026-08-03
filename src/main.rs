@@ -628,6 +628,7 @@ impl App {
             ctl(CTRL_BLACK, "BUTTON", "Black", 286, 356, 62, 26, 0);
             ctl(CTRL_WHITE, "BUTTON", "White", 352, 356, 62, 26, 0);
             ctl(CTRL_STARTUP, "BUTTON", "Start with Windows", 16, 390, 180, 26, BS_AUTOCHECKBOX as u32);
+            ctl(CTRL_EXIT, "BUTTON", "Exit", 390, 390, 62, 26, 0);
             // fill controls with saved state
             self.refresh_lists();
         }
