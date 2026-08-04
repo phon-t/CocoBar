@@ -38,10 +38,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BM_SETCHECK, BS_AUTOCHECKBOX, CreateIconIndirect, CreatePopupMenu,
     CreateWindowExW, CS_DBLCLKS, DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
     GetCursorPos, GetDlgItem, GetParent, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
-    GWLP_USERDATA, ICONINFO, IDC_ARROW, IDI_APPLICATION, KillTimer, LoadCursorW, LoadIconW,
+    GWLP_USERDATA, HWND_NOTOPMOST, HWND_TOPMOST, ICONINFO, IDC_ARROW, IDI_APPLICATION, KillTimer, LoadCursorW, LoadIconW,
     MF_CHECKED, MF_POPUP, MF_STRING, MF_UNCHECKED, PostQuitMessage, RegisterClassExW, SendMessageW,
     SetForegroundWindow, SetProcessDPIAware, SetTimer, SetWindowLongPtrW, SetWindowPos,
-    SetWindowTextW, ShowWindow, SM_CXSCREEN, SM_CYSCREEN, SWP_NOZORDER, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    SetWindowTextW, ShowWindow, SM_CXSCREEN, SM_CYSCREEN, SWP_NOMOVE, SWP_NOZORDER, TPM_RETURNCMD, TPM_RIGHTBUTTON,
     TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, ULW_ALPHA, WNDCLASSEXW, WM_ACTIVATE, WM_APP,
     WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_ENDSESSION, WM_ERASEBKGND, WM_HOTKEY, WM_HSCROLL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_QUERYENDSESSION,
     WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT,
@@ -89,9 +89,11 @@ const BTN_TODO_ADD: usize = 313;
 const LB_TODO: usize = 314;
 const BTN_TODO_TOGGLE: usize = 315;
 const BTN_TODO_DEL: usize = 316;
+const CTRL_TOPMOST: usize = 209;
+const BTN_CHECK_UPDATE: usize = 317;
 
 const MENU_W: i32 = 470;
-const MENU_H: i32 = 430;
+const MENU_H: i32 = 460;
 const SIZE_MIN: i32 = 100;
 const SIZE_MAX: i32 = 760;
 const SIZE_STEP: i32 = 40;
@@ -105,6 +107,7 @@ const CONTENT_H: i32 = 1748;
 const MAX_OFF_X: f32 = 77.0;
 const MAX_OFF_Y: f32 = 87.0;
 const TRAY_CB: u32 = WM_APP + 2;
+const APP_VERSION: &str = "0.2.0";
 
 const BLACK_SOCKET: &[u8] = include_bytes!("../assets/blackcatwitheyesocket.png");
 const WHITE_SOCKET: &[u8] = include_bytes!("../assets/whitecatwitheyesocket.png");
@@ -177,6 +180,7 @@ struct App {
     cached_w: u32,
     cached_h: u32,
     menu_timer_id: u32,
+    always_on_top: bool,
 }
 
 fn rgba_to_layer(rgba: Vec<u8>, w: usize, h: usize) -> Layer {
@@ -521,6 +525,18 @@ impl App {
         self.update_tray();
     }
 
+    fn set_topmost(&mut self, on: bool) {
+        self.always_on_top = on;
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                if on { (HWND_TOPMOST as isize) as HWND } else { (HWND_NOTOPMOST as isize) as HWND },
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE,
+            );
+        }
+    }
+
     fn show_menu(&mut self) {
         unsafe {
             if !self.menu_hwnd.is_null() {
@@ -632,6 +648,8 @@ impl App {
             ctl(CTRL_BLACK, "BUTTON", "Black", 286, 356, 62, 26, 0);
             ctl(CTRL_WHITE, "BUTTON", "White", 352, 356, 62, 26, 0);
             ctl(CTRL_STARTUP, "BUTTON", "Start with Windows", 16, 390, 180, 26, BS_AUTOCHECKBOX as u32);
+            ctl(CTRL_TOPMOST, "BUTTON", "Always on Top", 16, 418, 180, 26, BS_AUTOCHECKBOX as u32);
+            ctl(BTN_CHECK_UPDATE, "BUTTON", "Check for Updates", 286, 418, 128, 26, 0);
             ctl(CTRL_EXIT, "BUTTON", "Exit", 390, 390, 62, 26, 0);
             // fill controls with saved state
             self.refresh_lists();
@@ -708,6 +726,7 @@ impl App {
                 }
             };
             set_chk(CTRL_STARTUP, self.startup_enabled());
+            set_chk(CTRL_TOPMOST, self.always_on_top);
         }
         self.sync_menu_size();
     }
@@ -831,6 +850,38 @@ impl App {
             Shell_NotifyIconW(NIM_ADD, &nid);
             nid.Anonymous.uVersion = NOTIFYICON_VERSION_4;
             Shell_NotifyIconW(NIM_SETVERSION, &nid);
+        }
+    }
+
+    fn check_for_update(&self) {
+        self.set_status("Checking for updates...");
+        let output = std::process::Command::new("powershell.exe")
+            .args(&[
+                "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                "-WindowStyle", "Hidden", "-Command",
+                "Invoke-RestMethod -Uri 'https://api.github.com/repos/phon-t/CocoBar/releases/latest' -UseBasicParsing | Select-Object -ExpandProperty tag_name",
+            ])
+            .output();
+        match output {
+            Ok(out) => {
+                let remote_tag = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if remote_tag.is_empty() {
+                    self.set_status("Could not reach GitHub.");
+                    return;
+                }
+                let remote_ver = remote_tag.trim_start_matches('v');
+                if remote_ver == APP_VERSION {
+                    self.set_status(&format!("You are up to date (v{})!", APP_VERSION));
+                } else {
+                    self.set_status(&format!("New v{} found! Opening download...", remote_ver));
+                    let _ = std::process::Command::new("cmd")
+                        .args(&["/C", "start", "https://github.com/phon-t/CocoBar/releases/latest"])
+                        .spawn();
+                }
+            }
+            Err(_) => {
+                self.set_status("Failed to check for updates.");
+            }
         }
     }
 
@@ -1086,8 +1137,8 @@ impl App {
 
     fn save_config(&self) {
         let text = format!(
-            "{}\n{}\n{}\n{}",
-            self.color, self.size_idx, self.pos_x, self.pos_y
+            "{}\n{}\n{}\n{}\n{}",
+            self.color, self.size_idx, self.pos_x, self.pos_y, if self.always_on_top { 1 } else { 0 }
         );
         let _ = std::fs::create_dir_all(self.config.parent().unwrap());
         let _ = std::fs::write(&self.config, text);
@@ -1101,6 +1152,9 @@ impl App {
                 self.size_idx = parts[1].parse().unwrap_or(1);
                 self.pos_x = parts[2].parse().unwrap_or(-1);
                 self.pos_y = parts[3].parse().unwrap_or(-1);
+            }
+            if parts.len() >= 5 {
+                self.always_on_top = parts[4].parse::<i32>().unwrap_or(1) == 1;
             }
         }
         self.size_idx = self.size_idx.min(2);
@@ -1489,6 +1543,7 @@ fn main() {
             cached_w: 0,
             cached_h: 0,
             menu_timer_id: 0,
+            always_on_top: true,
         };
         app.exe = std::env::current_exe().unwrap_or_default();
         let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
@@ -1554,6 +1609,10 @@ fn main() {
         );
         app.hwnd = hwnd;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, &mut app as *mut App as isize);
+
+        if !app.always_on_top {
+            app.set_topmost(false);
+        }
 
         app.hdc_screen = GetDC(null_mut());
         app.hdc_mem = CreateCompatibleDC(app.hdc_screen);
@@ -1858,6 +1917,12 @@ impl App {
             },
             CTRL_STARTUP => {
                 self.set_startup(!self.startup_enabled());
+            }
+            CTRL_TOPMOST => {
+                self.set_topmost(!self.always_on_top);
+            }
+            BTN_CHECK_UPDATE => {
+                self.check_for_update();
             }
             BTN_REM_SET => self.add_reminder_ui(),
             BTN_REM_DEL => self.delete_reminder_ui(),
