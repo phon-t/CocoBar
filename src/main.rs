@@ -27,7 +27,7 @@ use windows_sys::Win32::UI::Controls::{
     TBM_SETPOS, TBM_SETRANGEMAX, TBM_SETRANGEMIN, TBM_SETTICFREQ, TBS_AUTOTICKS, TBS_HORZ,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, MOD_ALT, MOD_CONTROL, RegisterHotKey, ReleaseCapture, SetCapture, VK_ESCAPE,
+    GetAsyncKeyState, GetFocus, MOD_ALT, MOD_CONTROL, RegisterHotKey, ReleaseCapture, SetCapture, VK_ESCAPE,
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
@@ -114,6 +114,8 @@ const EYES: &[u8] = include_bytes!("../assets/eyes.png");
 const HIGHLIGHT: &[u8] = include_bytes!("../assets/highlight.png");
 const BLACK_FULL: &[u8] = include_bytes!("../assets/blackcatfull.png");
 const WHITE_FULL: &[u8] = include_bytes!("../assets/whitecatfull.png");
+const BLACK_ANNOYED: &[u8] = include_bytes!("../assets/blackcatannoyed.png");
+const WHITE_ANNOYED: &[u8] = include_bytes!("../assets/whitecatannoyed.png");
 
 struct Layer {
     w: usize,
@@ -169,6 +171,8 @@ struct App {
     drag_win_y: i32,
     drag_mouse_x: i32,
     drag_mouse_y: i32,
+    annoyed_until: Option<Instant>,
+    prev_mouse_down: bool,
     cached_rgba: Vec<u8>,
     cached_w: u32,
     cached_h: u32,
@@ -903,6 +907,57 @@ impl App {
 
     fn render(&mut self) {
         let now = Instant::now();
+
+        // Detect single-click on cat (GetAsyncKeyState since WS_EX_NOACTIVATE blocks WM_LBUTTONDOWN)
+        let mouse_down = unsafe { GetAsyncKeyState(0x01) } as u16 & 0x8000 != 0;
+        if mouse_down && !self.prev_mouse_down {
+            let mut pt = POINT { x: 0, y: 0 };
+            if unsafe { GetCursorPos(&mut pt) } != 0 {
+                if pt.x >= self.pos_x
+                    && pt.x <= self.pos_x + self.w
+                    && pt.y >= self.pos_y
+                    && pt.y <= self.pos_y + self.h
+                {
+                    self.annoyed_until = Some(now + std::time::Duration::from_millis(1500));
+                }
+            }
+        }
+        self.prev_mouse_down = mouse_down;
+
+        // If annoyed, render the annoyed full-image instead of normal composite
+        if let Some(until) = self.annoyed_until {
+            if now < until {
+                let annoyed_bytes = if self.color == 0 { BLACK_ANNOYED } else { WHITE_ANNOYED };
+                let crop = (CONTENT_X, CONTENT_Y, CONTENT_W, CONTENT_H);
+                let layer = load_layer(annoyed_bytes, crop, self.scale);
+                self.buf.fill(0);
+                let dw = self.w as usize;
+                let dh = self.h as usize;
+                if layer.w == dw && layer.h == dh {
+                    self.buf.copy_from_slice(&layer.data);
+                } else {
+                    blit(&mut self.buf, dw, dh, &layer.data, layer.w, layer.h, 0, 0);
+                }
+                unsafe {
+                    if !self.bits.is_null() {
+                        std::ptr::copy_nonoverlapping(self.buf.as_ptr(), self.bits as *mut u8, self.buf.len());
+                        let pt_dst = POINT { x: self.pos_x, y: self.pos_y };
+                        let size = SIZE { cx: self.w, cy: self.h };
+                        let pt_src = POINT { x: 0, y: 0 };
+                        let blend = BLENDFUNCTION {
+                            BlendOp: AC_SRC_OVER as u8,
+                            BlendFlags: 0,
+                            SourceConstantAlpha: 255,
+                            AlphaFormat: AC_SRC_ALPHA as u8,
+                        };
+                        UpdateLayeredWindow(self.hwnd, self.hdc_screen, &pt_dst, &size, self.hdc_mem, &pt_src, 0, &blend, ULW_ALPHA);
+                    }
+                }
+                return;
+            } else {
+                self.annoyed_until = None;
+            }
+        }
         let mut pt = POINT { x: 0, y: 0 };
         let mut cursor_moved = false;
         if unsafe { GetCursorPos(&mut pt) } != 0 {
@@ -1428,6 +1483,8 @@ fn main() {
             drag_win_y: 0,
             drag_mouse_x: 0,
             drag_mouse_y: 0,
+            annoyed_until: None,
+            prev_mouse_down: false,
             cached_rgba: Vec::new(),
             cached_w: 0,
             cached_h: 0,
