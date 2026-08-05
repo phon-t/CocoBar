@@ -1,10 +1,11 @@
 [package]
 name = "cocobar"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+rand = "0.10.2"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

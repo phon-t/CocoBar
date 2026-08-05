@@ -12,7 +12,7 @@ fn main() {
     res.set_icon(ico_path.to_str().unwrap());
     res.set("FileDescription", "cocoBar - Desktop Cat Companion");
     res.set("ProductName", "cocoBar");
-    res.set("ProductVersion", "0.1.0");
+    res.set("ProductVersion", "0.4.0");
     res.compile().unwrap();
 }
 

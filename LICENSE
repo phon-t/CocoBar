@@ -1,21 +1,47 @@
-MIT License
+cocoBar Custom License
+======================
 
-Copyright (c) 2026
+Copyright (c) 2026 phon-t (phon-t / CocoBar contributors)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+to use, copy, modify, merge, publish, distribute, sublicense, and to permit
+persons to whom the Software is furnished to do so, subject to the following
+conditions:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. PERSONAL AND EDUCATIONAL USE
+   -----------------------------
+   Personal, private, and educational use is permitted for any purpose,
+   including for-profit institutions acting in a non-commercial capacity.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. COMMERCIAL USE
+   ----------------
+   Any use of the Software, or any derivative work based on it, that is
+   intended to generate revenue or financial gain (including but not limited
+   to selling, licensing, bundling, SaaS hosting, or redistribution of
+   modified versions for commercial purposes) requires PRIOR WRITTEN NOTICE
+   to, and explicit consent from, the copyright holder. To obtain permission,
+   contact the author by opening an issue on the project repository before
+   the commercial use begins. Unauthorized commercial use is prohibited.
+
+3. ATTRIBUTION
+   -------------
+   Redistribution in source or binary form must retain the above copyright
+   notice, this list of conditions, and the following disclaimer, including
+   any notices in documentation or about dialogs.
+
+4. NO WARRANTY
+   -------------
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+5. ASSETS
+   --------
+   All image assets included in the Software are part of the Software and
+   are subject to these same terms.
