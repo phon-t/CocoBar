@@ -1,2 +1,14 @@
 /target
 AGENTS.md
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*.sln
+Thumbs.db
+Desktop.ini
+
+# Build artifacts
+*.exe
+*.ico.tmp
