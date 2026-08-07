@@ -45,18 +45,20 @@ pub(crate) const FRAME_MS: u32 = 16;
 
 pub(crate) const MENU_BLACK: usize = 101;
 pub(crate) const MENU_WHITE: usize = 102;
-pub(crate) const MENU_SIZE_SMALL: usize = 103;
-pub(crate) const MENU_SIZE_MEDIUM: usize = 104;
-pub(crate) const MENU_SIZE_LARGE: usize = 105;
-pub(crate) const MENU_EXIT: usize = 107;
-pub(crate) const MENU_SHORTCUT_DESKTOP: usize = 108;
-pub(crate) const MENU_STARTUP: usize = 109;
+pub(crate) const MENU_ORANGE: usize = 103;
+pub(crate) const MENU_SIZE_SMALL: usize = 105;
+pub(crate) const MENU_SIZE_MEDIUM: usize = 106;
+pub(crate) const MENU_SIZE_LARGE: usize = 107;
+pub(crate) const MENU_EXIT: usize = 109;
+pub(crate) const MENU_SHORTCUT_DESKTOP: usize = 110;
+pub(crate) const MENU_STARTUP: usize = 111;
 
 pub(crate) const HK_BLACK: i32 = 1;
 pub(crate) const HK_WHITE: i32 = 2;
-pub(crate) const HK_SMALL: i32 = 3;
-pub(crate) const HK_MEDIUM: i32 = 4;
-pub(crate) const HK_LARGE: i32 = 5;
+pub(crate) const HK_ORANGE: i32 = 3;
+pub(crate) const HK_SMALL: i32 = 4;
+pub(crate) const HK_MEDIUM: i32 = 5;
+pub(crate) const HK_LARGE: i32 = 6;
 pub(crate) const HK_EXIT: i32 = 7;
 
 pub(crate) const SIZE_STEP: i32 = 40;
@@ -69,8 +71,9 @@ pub(crate) fn size_limits() -> (i32, i32) {
 
 pub(crate) const BLACK_FULL: &[u8] = include_bytes!("../assets/blackcatfull.png");
 pub(crate) const WHITE_FULL: &[u8] = include_bytes!("../assets/whitecatfull.png");
+pub(crate) const ORANGE_FULL: &[u8] = include_bytes!("../assets/orangecatfull.png");
 
-pub(crate) const APP_VERSION: &str = "0.4.0";
+pub(crate) const APP_VERSION: &str = "0.5.0";
 pub(crate) const TRAY_CB: u32 = WM_APP + 2;
 
 pub struct App {
@@ -222,7 +225,7 @@ impl App {
                 DestroyIcon(self.icon);
             }
         }
-        let img_bytes = if self.color == 0 { BLACK_FULL } else { WHITE_FULL };
+        let img_bytes = [BLACK_FULL, WHITE_FULL, ORANGE_FULL][self.color.min(2)];
         let mut img = image::load_from_memory_with_format(img_bytes, image::ImageFormat::Png)
             .expect("icon decode")
             .to_rgba8();
@@ -302,6 +305,7 @@ impl App {
             let popmenu = CreatePopupMenu();
             AppendMenuW(popmenu, MF_STRING | if self.color == 0 { MF_CHECKED } else { MF_UNCHECKED }, MENU_BLACK, wstr("Black Cat"));
             AppendMenuW(popmenu, MF_STRING | if self.color == 1 { MF_CHECKED } else { MF_UNCHECKED }, MENU_WHITE, wstr("White Cat"));
+            AppendMenuW(popmenu, MF_STRING | if self.color == 2 { MF_CHECKED } else { MF_UNCHECKED }, MENU_ORANGE, wstr("Orange Cat"));
             AppendMenuW(popmenu, MF_STRING, 0, wstr(""));
             let size_menu = CreatePopupMenu();
             for (i, label) in ["Small", "Medium", "Large"].iter().enumerate() {
@@ -328,6 +332,7 @@ impl App {
         match id {
             MENU_BLACK => self.set_color(0),
             MENU_WHITE => self.set_color(1),
+            MENU_ORANGE => self.set_color(2),
             MENU_SIZE_SMALL | MENU_SIZE_MEDIUM | MENU_SIZE_LARGE => {
                 self.set_size(id - MENU_SIZE_SMALL)
             }
@@ -597,6 +602,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 match wparam as i32 {
                     HK_BLACK => app.set_color(0),
                     HK_WHITE => app.set_color(1),
+                    HK_ORANGE => app.set_color(2),
                     HK_SMALL => app.set_size(0),
                     HK_MEDIUM => app.set_size(1),
                     HK_LARGE => app.set_size(2),
@@ -866,6 +872,7 @@ fn main() {
 
         RegisterHotKey(hwnd, HK_BLACK, MOD_CONTROL | MOD_ALT, 0x42);
         RegisterHotKey(hwnd, HK_WHITE, MOD_CONTROL | MOD_ALT, 0x57);
+        RegisterHotKey(hwnd, HK_ORANGE, MOD_CONTROL | MOD_ALT, 0x4F);
         RegisterHotKey(hwnd, HK_SMALL, MOD_CONTROL | MOD_ALT, 0x31);
         RegisterHotKey(hwnd, HK_MEDIUM, MOD_CONTROL | MOD_ALT, 0x32);
         RegisterHotKey(hwnd, HK_LARGE, MOD_CONTROL | MOD_ALT, 0x33);

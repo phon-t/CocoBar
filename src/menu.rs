@@ -40,6 +40,7 @@ pub(crate) const BTN_COS_CLEAR_ALL: u32 = 464;
 pub(crate) const BTN_TOPMOST: u32 = 465;
 pub(crate) const BTN_COLOR_BLACK: u32 = 470;
 pub(crate) const BTN_COLOR_WHITE: u32 = 471;
+pub(crate) const BTN_COLOR_ORANGE: u32 = 472;
 pub(crate) const ED_SIZE: u32 = 484;
 pub(crate) const BTN_SIZE_APPLY: u32 = 485;
 pub(crate) const BTN_DESKTOP: u32 = 490;
@@ -802,9 +803,17 @@ unsafe fn create_customize_controls(hwnd: HWND, app: &super::App) {
     let radio = 0x0009u32; // BS_AUTORADIOBUTTON
 
     make_ctl(hwnd, 0, "STATIC", "Cat Color", 20, 60, 360, 20, SS_LEFT, font);
-    let color_black = make_ctl(hwnd, BTN_COLOR_BLACK, "BUTTON", "Black Cat", 30, 84, 160, 28, radio, font);
-    let color_white = make_ctl(hwnd, BTN_COLOR_WHITE, "BUTTON", "White Cat", 205, 84, 165, 28, radio, font);
-    SendMessageW(if app.color == 0 { color_black } else { color_white }, BM_SETCHECK, BST_CHECKED as _, 0);
+    let color_black = make_ctl(hwnd, BTN_COLOR_BLACK, "BUTTON", "Black", 30, 84, 110, 28, radio, font);
+    let color_white = make_ctl(hwnd, BTN_COLOR_WHITE, "BUTTON", "White", 148, 84, 110, 28, radio, font);
+    let color_orange = make_ctl(hwnd, BTN_COLOR_ORANGE, "BUTTON", "Orange", 266, 84, 110, 28, radio, font);
+    let color_sel = if app.color == 0 {
+        color_black
+    } else if app.color == 1 {
+        color_white
+    } else {
+        color_orange
+    };
+    SendMessageW(color_sel, BM_SETCHECK, BST_CHECKED as _, 0);
 
     make_ctl(hwnd, 0, "STATIC", "Scarf (one at a time)", 20, 124, 360, 20, SS_LEFT, font);
     let scarf_sel = app.cosmetic_scarf;
@@ -873,6 +882,7 @@ unsafe fn sync_cos_checks(hwnd: HWND, app: &super::App) {
     };
         check(BTN_COLOR_BLACK, app.color == 0);
         check(BTN_COLOR_WHITE, app.color == 1);
+        check(BTN_COLOR_ORANGE, app.color == 2);
         check(BTN_TOPMOST, app.always_on_top);
         check(BTN_DESKTOP, app.desktop_shortcut_exists());
         check(BTN_STARTUP, app.startup_enabled());
@@ -1031,7 +1041,7 @@ pub(crate) unsafe extern "system" fn customize_wnd_proc(
                         app.set_startup(!app.startup_enabled());
                         sync_cos_checks(hwnd, app);
                     }
-                    BTN_COLOR_BLACK | BTN_COLOR_WHITE => {
+                    BTN_COLOR_BLACK | BTN_COLOR_WHITE | BTN_COLOR_ORANGE => {
                         app.set_color((id - BTN_COLOR_BLACK) as usize);
                         save_cfg(app);
                         sync_cos_checks(hwnd, app);

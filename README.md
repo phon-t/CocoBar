@@ -57,7 +57,7 @@ Then just **double-click `cocobar.exe`** to run. That's it!
 | **Move the cat** | Click and hold the cat, then drag it anywhere. Let go to drop it. |
 | **Resize the cat** | Scroll the mouse wheel over the cat, or open the menu > Customize > type a size (100–500 px) and click Apply. |
 | **Open the menu** | Double-click or right-click on the cat |
-| **Switch color** | Open the menu > Customize, or press `Ctrl+Alt+B` / `Ctrl+Alt+W` |
+| **Switch color** | Open the menu > Customize, or press `Ctrl+Alt+B` (black), `Ctrl+Alt+W` (white), or `Ctrl+Alt+O` (orange) |
 | **Change size quickly** | Press `Ctrl+Alt+1` (small), `Ctrl+Alt+2` (medium), or `Ctrl+Alt+3` (large) |
 | **Add a task** | Open the menu > To Do tab > type a task > click "Add" |
 | **Complete a task** | Click the task's checkbox in the To Do tab (toggles strikethrough) |
@@ -78,6 +78,7 @@ All shortcuts use **Ctrl+Alt**:
 |---|---|
 | `B` | Switch to black cat |
 | `W` | Switch to white cat |
+| `O` | Switch to orange cat |
 | `1` | Small size (320px) |
 | `2` | Medium size (520px) |
 | `3` | Large size (760px) |
@@ -90,7 +91,7 @@ All shortcuts use **Ctrl+Alt**:
 - **Eye tracking** -- pupils follow your mouse with smooth animation and stay inside the eye socket
 - **Natural blinking** -- random blink every few seconds, with cosmetics staying in place
 - **Annoyed face** -- click the cat and it makes an annoyed expression
-- **Black and White** -- two color variants, switchable anytime
+- **Black, White and Orange** -- three color variants, switchable anytime
 - **Customization** -- 5 scarves, 2 bells, 3 ties, or remove everything
 - **Resize** -- typed size input (100–500 px) plus scroll-wheel stepping and hotkeys
 - **To-do List** -- add, complete (strikethrough), and clear tasks, saved between sessions
