@@ -24,12 +24,15 @@ pub(crate) const DEADZONE: f32 = 20.0;
 
 const BLACK_SOCKET: &[u8] = include_bytes!("../assets/blackcatwitheyesocket.png");
 const WHITE_SOCKET: &[u8] = include_bytes!("../assets/whitecatwitheyesocket.png");
+const ORANGE_SOCKET: &[u8] = include_bytes!("../assets/orangecatwitheyesocket.png");
 const BLACK_CLOSED: &[u8] = include_bytes!("../assets/blackcateyesclossed.png");
 const WHITE_CLOSED: &[u8] = include_bytes!("../assets/whitecateyesclossed.png");
+const ORANGE_CLOSED: &[u8] = include_bytes!("../assets/orangecateyesclossed.png");
 const EYES: &[u8] = include_bytes!("../assets/eyes.png");
 const HIGHLIGHT: &[u8] = include_bytes!("../assets/highlight.png");
 const BLACK_ANNOYED: &[u8] = include_bytes!("../assets/blackcatannoyed.png");
 const WHITE_ANNOYED: &[u8] = include_bytes!("../assets/whitecatannoyed.png");
+const ORANGE_ANNOYED: &[u8] = include_bytes!("../assets/orangecatannoyed.png");
 
 #[derive(Clone)]
 pub(crate) struct Layer {
@@ -206,12 +209,9 @@ pub(crate) struct CatRenderer {
     pub wander_t: f32,
     pub cursor_last: POINT,
     pub cursor_still: f32,
-    pub cached_rgba_black: Vec<u8>,
-    pub cached_rgba_white: Vec<u8>,
-    pub cached_closed_black: Vec<u8>,
-    pub cached_closed_white: Vec<u8>,
-    pub cached_annoyed_black: Vec<u8>,
-    pub cached_annoyed_white: Vec<u8>,
+    pub cached_rgba: [Vec<u8>; 3],
+    pub cached_closed: [Vec<u8>; 3],
+    pub cached_annoyed: [Vec<u8>; 3],
     pub cached_eyes: Vec<u8>,
     pub cached_hl: Vec<u8>,
     pub cached_w: u32,
@@ -246,12 +246,9 @@ impl CatRenderer {
             wander_t: 0.0,
             cursor_last: POINT { x: 0, y: 0 },
             cursor_still: 0.0,
-            cached_rgba_black: Vec::new(),
-            cached_rgba_white: Vec::new(),
-            cached_closed_black: Vec::new(),
-            cached_closed_white: Vec::new(),
-            cached_annoyed_black: Vec::new(),
-            cached_annoyed_white: Vec::new(),
+            cached_rgba: [Vec::new(), Vec::new(), Vec::new()],
+            cached_closed: [Vec::new(), Vec::new(), Vec::new()],
+            cached_annoyed: [Vec::new(), Vec::new(), Vec::new()],
             cached_eyes: Vec::new(),
             cached_hl: Vec::new(),
             cached_w: 0,
@@ -260,7 +257,10 @@ impl CatRenderer {
     }
 
     pub(crate) fn rebuild_layers(&mut self, color: usize, w: i32, h: i32, scale: f32) {
-        let socket_bytes = if color == 1 { WHITE_SOCKET } else { BLACK_SOCKET };
+        let color = color.min(2);
+        let socket_bytes = [BLACK_SOCKET, WHITE_SOCKET, ORANGE_SOCKET][color];
+        let closed_bytes = [BLACK_CLOSED, WHITE_CLOSED, ORANGE_CLOSED][color];
+        let annoyed_bytes = [BLACK_ANNOYED, WHITE_ANNOYED, ORANGE_ANNOYED][color];
 
         let crop = (CONTENT_X, CONTENT_Y, CONTENT_W, CONTENT_H);
 
@@ -275,36 +275,20 @@ impl CatRenderer {
         let cw = self.cached_w;
         let ch = self.cached_h;
 
-        let cache = if color == 1 {
-            &mut self.cached_rgba_white
-        } else {
-            &mut self.cached_rgba_black
-        };
-        if cache.is_empty() {
+        if self.cached_rgba[color].is_empty() {
             let (rgba, _, _) = decode_and_crop(socket_bytes, crop);
-            *cache = rgba;
+            self.cached_rgba[color] = rgba;
         }
-        self.base = load_layer_cached(cache, cw, ch, scale);
+        if self.cached_closed[color].is_empty() {
+            self.cached_closed[color] = decode_and_crop(closed_bytes, crop).0;
+        }
+        if self.cached_annoyed[color].is_empty() {
+            self.cached_annoyed[color] = decode_and_crop(annoyed_bytes, crop).0;
+        }
 
-        if color == 1 {
-            if self.cached_closed_white.is_empty() {
-                self.cached_closed_white = decode_and_crop(WHITE_CLOSED, crop).0;
-            }
-            if self.cached_annoyed_white.is_empty() {
-                self.cached_annoyed_white = decode_and_crop(WHITE_ANNOYED, crop).0;
-            }
-            self.closed = load_layer_cached(&self.cached_closed_white, cw, ch, scale);
-            self.annoyed = Some(load_layer_cached(&self.cached_annoyed_white, cw, ch, scale));
-        } else {
-            if self.cached_closed_black.is_empty() {
-                self.cached_closed_black = decode_and_crop(BLACK_CLOSED, crop).0;
-            }
-            if self.cached_annoyed_black.is_empty() {
-                self.cached_annoyed_black = decode_and_crop(BLACK_ANNOYED, crop).0;
-            }
-            self.closed = load_layer_cached(&self.cached_closed_black, cw, ch, scale);
-            self.annoyed = Some(load_layer_cached(&self.cached_annoyed_black, cw, ch, scale));
-        }
+        self.base = load_layer_cached(&self.cached_rgba[color], cw, ch, scale);
+        self.closed = load_layer_cached(&self.cached_closed[color], cw, ch, scale);
+        self.annoyed = Some(load_layer_cached(&self.cached_annoyed[color], cw, ch, scale));
 
         self.eyes = load_layer_cached(&self.cached_eyes, cw, ch, scale);
         self.hl = load_layer_cached(&self.cached_hl, cw, ch, scale);
