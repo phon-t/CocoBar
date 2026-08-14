@@ -12,8 +12,10 @@ fn main() {
     res.set_icon(ico_path.to_str().unwrap());
     res.set("FileDescription", "cocoBar - Desktop Cat Companion");
     res.set("ProductName", "cocoBar");
-    res.set("ProductVersion", "0.5.0");
-    res.compile().unwrap();
+    res.set("ProductVersion", "0.6.0");
+    if res.compile().is_err() {
+        eprintln!("warning: rc.exe not found; skipping embedded icon resources");
+    }
 }
 
 fn generate_ico(out: &Path) {

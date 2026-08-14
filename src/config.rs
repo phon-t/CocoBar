@@ -11,6 +11,7 @@ pub(crate) struct ConfigData {
     pub cosmetic_bell: Option<usize>,
     pub cosmetic_scarf: Option<usize>,
     pub cosmetic_tie: Option<usize>,
+    pub hotkeys: u8,
 }
 
 pub(crate) struct UserData {
@@ -49,6 +50,7 @@ pub(crate) fn load_config(path: &Path) -> ConfigData {
         cosmetic_bell: None,
         cosmetic_scarf: None,
         cosmetic_tie: None,
+        hotkeys: 0b111_1111,
     };
 
     let content = match fs::read_to_string(path) {
@@ -65,6 +67,7 @@ pub(crate) fn load_config(path: &Path) -> ConfigData {
     let mut cosmetic_bell = defaults.cosmetic_bell;
     let mut cosmetic_scarf = defaults.cosmetic_scarf;
     let mut cosmetic_tie = defaults.cosmetic_tie;
+    let mut hotkeys = defaults.hotkeys;
 
     for line in content.lines() {
         let line = line.trim();
@@ -112,6 +115,11 @@ pub(crate) fn load_config(path: &Path) -> ConfigData {
                 let n: i32 = v.parse().unwrap_or(-1);
                 cosmetic_tie = if n < 0 { None } else { Some(n as usize) };
             }
+        } else if let Some(val) = line.strip_prefix("{hotkeys: ") {
+            if let Some(v) = val.strip_suffix('}') {
+                let n: i32 = v.parse().unwrap_or(defaults.hotkeys as i32);
+                hotkeys = n.clamp(0, 127) as u8;
+            }
         }
     }
 
@@ -125,6 +133,7 @@ pub(crate) fn load_config(path: &Path) -> ConfigData {
         cosmetic_bell,
         cosmetic_scarf,
         cosmetic_tie,
+        hotkeys,
     }
 }
 
@@ -152,7 +161,8 @@ pub(crate) fn save_config(path: &Path, data: &ConfigData) {
          {{always_on_top: {}}}\n\
          {{cosmetic_bell: {}}}\n\
          {{cosmetic_scarf: {}}}\n\
-         {{cosmetic_tie: {}}}\n",
+         {{cosmetic_tie: {}}}\n\
+         {{hotkeys: {}}}\n",
         data.color,
         data.size_idx,
         data.size_px,
@@ -162,6 +172,7 @@ pub(crate) fn save_config(path: &Path, data: &ConfigData) {
         bell,
         scarf,
         tie,
+        data.hotkeys,
     );
 
     let _ = fs::write(path, content);

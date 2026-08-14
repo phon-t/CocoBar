@@ -1,4 +1,4 @@
-﻿#![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 
 mod cat;
 mod config;
@@ -10,15 +10,15 @@ use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 use std::sync::Mutex;
 use std::time::Instant;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
+use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM, ERROR_ALREADY_EXISTS};
 use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, WaitForSingleObject, CREATE_NO_WINDOW, INFINITE, PROCESS_INFORMATION, STARTUPINFOW,
+    CreateMutexW, CreateProcessW, WaitForSingleObject, CREATE_NO_WINDOW, INFINITE, PROCESS_INFORMATION, STARTUPINFOW,
 };
 use windows_sys::Win32::UI::Controls::{InitCommonControlsEx, INITCOMMONCONTROLSEX, ICC_BAR_CLASSES};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, MOD_ALT, MOD_CONTROL, RegisterHotKey,
+    GetAsyncKeyState, MOD_ALT, MOD_CONTROL, RegisterHotKey, UnregisterHotKey,
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
@@ -60,6 +60,7 @@ pub(crate) const HK_SMALL: i32 = 4;
 pub(crate) const HK_MEDIUM: i32 = 5;
 pub(crate) const HK_LARGE: i32 = 6;
 pub(crate) const HK_EXIT: i32 = 7;
+const HK_VK: [u32; 7] = [0x42, 0x57, 0x4F, 0x31, 0x32, 0x33, 0x58];
 
 pub(crate) const SIZE_STEP: i32 = 40;
 pub(crate) const SIZES: [i32; 3] = [320, 520, 760];
@@ -73,7 +74,7 @@ pub(crate) const BLACK_FULL: &[u8] = include_bytes!("../assets/blackcatfull.png"
 pub(crate) const WHITE_FULL: &[u8] = include_bytes!("../assets/whitecatfull.png");
 pub(crate) const ORANGE_FULL: &[u8] = include_bytes!("../assets/orangecatfull.png");
 
-pub(crate) const APP_VERSION: &str = "0.5.0";
+pub(crate) const APP_VERSION: &str = "0.6.0";
 pub(crate) const TRAY_CB: u32 = WM_APP + 2;
 
 pub struct App {
@@ -96,14 +97,20 @@ pub struct App {
     pub exe: PathBuf,
     pub menu_hwnd: HWND,
     pub customize_hwnd: HWND,
+    pub settings_hwnd: HWND,
     pub menu_tab: u32,
     pub note: String,
     pub todos: Vec<(String, bool)>,
     pub drag_active: bool,
+    pub drag_prev: bool,
     pub drag_win_x: i32,
     pub drag_win_y: i32,
     pub drag_mouse_x: i32,
     pub drag_mouse_y: i32,
+    pub press_mouse_x: i32,
+    pub press_mouse_y: i32,
+    pub tilt_restore_w: i32,
+    pub tilt_restore_h: i32,
     pub annoyed_until: Option<Instant>,
     pub prev_mouse_down: bool,
     pub always_on_top: bool,
@@ -112,6 +119,9 @@ pub struct App {
     pub cosmetic_tie: Option<usize>,
     pub status: String,
     pub menu_timer_id: u32,
+    pub hotkeys: u8,
+    pub settings_scroll: i32,
+    pub mouse_pt: POINT,
 }
 
 impl App {
@@ -157,6 +167,8 @@ impl App {
         }
         self.cat.rebuild_layers(self.color, self.w, self.h, self.scale);
         self.cat.rebuild_cosmetics(self.cosmetic_bell, self.cosmetic_scarf, self.cosmetic_tie, self.scale);
+        // Keep the tilt-pose caches fresh for the current zoom so grabs stay instant
+        self.cat.ensure_tilted(self.scale * cat::TILT_SCALE_FACTOR);
         self.rebuild_dib();
     }
 
@@ -203,6 +215,119 @@ impl App {
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE,
             );
+        }
+    }
+
+    fn set_raw_window(&mut self, w: i32, h: i32, content_w: f32) {
+        let (min_w, _) = size_limits();
+        let sw = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+        let max_w = (sw - 40).max(min_w);
+        let max_h = (sh - 60).max(120);
+        let mut nw = w.max(min_w);
+        let mut nh = h.max(120);
+        if nw > max_w {
+            let k = max_w as f32 / nw as f32;
+            nw = max_w;
+            nh = (nh as f32 * k).round() as i32;
+        }
+        if nh > max_h {
+            let k = max_h as f32 / nh as f32;
+            nh = max_h;
+            nw = (nw as f32 * k).round() as i32;
+        }
+        self.w = nw;
+        self.h = nh;
+        self.scale = nw as f32 / content_w;
+        self.cat.rebuild_layers(self.color, self.w, self.h, self.scale);
+        self.cat.rebuild_cosmetics(self.cosmetic_bell, self.cosmetic_scarf, self.cosmetic_tie, self.scale);
+        self.rebuild_dib();
+    }
+
+    fn enter_tilt(&mut self) {
+        self.cat.tail.reset();
+        self.tilt_restore_w = self.w;
+        self.tilt_restore_h = self.h;
+        // Draw the tilted pose a touch smaller than the raw canvas so it matches the
+        // normal cat's visual size
+        let ts = self.scale * cat::TILT_SCALE_FACTOR;
+        let tw = ((cat::TILT_W as f32) * ts).round().max(1.0) as i32;
+        let th = ((cat::TILT_H as f32) * ts).round().max(1.0) as i32;
+        // Anchor: keep the cat's bottom edge fixed while the window changes size.
+        // The tilted pose only needs the pre-warmed tilt layers + the DIB, so skip
+        // the expensive normal-pose layer rebuild for a lag-free drag start.
+        let old_b = self.pos_y + self.h;
+        self.w = tw;
+        self.h = th;
+        self.scale = tw as f32 / cat::TILT_W as f32;
+        self.rebuild_dib();
+        self.cat.ensure_tilted(self.scale);
+        self.pos_y = old_b - self.h;
+        if self.pos_y < 0 {
+            self.pos_y = 0;
+        }
+        self.cat.drag_active = true;
+        self.cat.render(self.pos_x, self.pos_y, self.w, self.h, self.scale,
+            self.hdc_screen, self.hdc_mem, self.bits, self.hwnd);
+        unsafe {
+            SetWindowPos(self.hwnd, null_mut(), self.pos_x, self.pos_y, self.w, self.h, SWP_NOZORDER);
+        }
+        // Keep the drag offset tracking consistent with the resized window
+        self.drag_win_x = self.pos_x;
+        self.drag_win_y = self.pos_y;
+    }
+
+    fn exit_tilt(&mut self) {
+        let nw = self.tilt_restore_w.max(100);
+        let nh = self.tilt_restore_h.max(120);
+        let old_b = self.pos_y + self.h;
+        self.set_raw_window(nw, nh, cat::CONTENT_W as f32);
+        self.pos_y = old_b - self.h;
+        if self.pos_y < 0 {
+            self.pos_y = 0;
+        }
+        self.cat.drag_active = false;
+        self.cat.render(self.pos_x, self.pos_y, self.w, self.h, self.scale,
+            self.hdc_screen, self.hdc_mem, self.bits, self.hwnd);
+        unsafe {
+            SetWindowPos(self.hwnd, null_mut(), self.pos_x, self.pos_y, self.w, self.h, SWP_NOZORDER);
+        }
+        self.drag_win_x = self.pos_x;
+        self.drag_win_y = self.pos_y;
+    }
+
+    fn draw_annoyed(&mut self) {
+        let Some(annoyed) = &self.cat.annoyed else { return };
+        if self.bits.is_null() {
+            return;
+        }
+        self.cat.buf.fill(0);
+        let dw = self.w as usize;
+        let dh = self.h as usize;
+        if annoyed.w == dw && annoyed.h == dh {
+            self.cat.buf.copy_from_slice(&annoyed.data);
+        } else {
+            cat::blit(&mut self.cat.buf, dw, dh, &annoyed.data, annoyed.w, annoyed.h, 0, 0);
+        }
+        // Keep cosmetics visible on the annoyed face
+        if let Some(s) = &self.cat.scarf {
+            cat::blit(&mut self.cat.buf, dw, dh, &s.data, s.w, s.h, 0, 0);
+        }
+        if let Some(b) = &self.cat.bell {
+            cat::blit(&mut self.cat.buf, dw, dh, &b.data, b.w, b.h, 0, 0);
+        }
+        if let Some(t) = &self.cat.tie {
+            cat::blit(&mut self.cat.buf, dw, dh, &t.data, t.w, t.h, 0, 0);
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.cat.buf.as_ptr(), self.bits as *mut u8, self.cat.buf.len());
+            let pt_dst = POINT { x: self.pos_x, y: self.pos_y };
+            let size = SIZE { cx: self.w, cy: self.h };
+            let pt_src = POINT { x: 0, y: 0 };
+            let blend = windows_sys::Win32::Graphics::Gdi::BLENDFUNCTION {
+                BlendOp: 0, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: 1,
+            };
+            UpdateLayeredWindow(self.hwnd, self.hdc_screen, &pt_dst, &size, self.hdc_mem, &pt_src, 0, &blend, ULW_ALPHA);
         }
     }
 
@@ -349,6 +474,34 @@ impl App {
 
     fn app_dir(&self) -> PathBuf {
         self.config_path.parent().unwrap_or(&PathBuf::from(".")).to_path_buf()
+    }
+
+    pub(crate) fn hotkey_enabled(&self, i: usize) -> bool {
+        i < 7 && (self.hotkeys & (1 << i)) != 0
+    }
+
+    pub(crate) fn set_hotkey(&mut self, i: usize, on: bool) {
+        if i >= 7 {
+            return;
+        }
+        let bit = 1u8 << i;
+        let id = (i + 1) as i32;
+        let was = (self.hotkeys & bit) != 0;
+        if on {
+            self.hotkeys |= bit;
+        } else {
+            self.hotkeys &= !bit;
+        }
+        if ((self.hotkeys & bit) != 0) == was {
+            return;
+        }
+        unsafe {
+            if on {
+                RegisterHotKey(self.hwnd, id, MOD_CONTROL | MOD_ALT, HK_VK[i]);
+            } else {
+                UnregisterHotKey(self.hwnd, id);
+            }
+        }
     }
 
     fn startup_lnk(&self) -> Option<PathBuf> {
@@ -518,7 +671,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             WM_TIMER if wparam == TIMER_ID as WPARAM => {
                 // Detect single-click on cat
                 let mouse_down = GetAsyncKeyState(0x01) as u16 & 0x8000 != 0;
-                if mouse_down && !app.prev_mouse_down {
+                if mouse_down && !app.prev_mouse_down && !app.drag_active {
                     let mut pt = POINT { x: 0, y: 0 };
                     if GetCursorPos(&mut pt) != 0 {
                         if pt.x >= app.pos_x && pt.x <= app.pos_x + app.w
@@ -530,44 +683,34 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 }
                 app.prev_mouse_down = mouse_down;
 
+                // Tilt enter/exit happens immediately in the mouse handlers; the timer just
+                // reflects the current drag state for the renderer
+                app.drag_prev = app.drag_active;
+
+                // No annoyed face while the cat is being dragged
+                if app.drag_active {
+                    app.annoyed_until = None;
+                }
+
                 // Render
+                app.cat.drag_active = app.drag_active;
                 let now = Instant::now();
                 if let Some(until) = app.annoyed_until {
                     if now < until {
-                        if let Some(annoyed) = &app.cat.annoyed {
-                            app.cat.buf.fill(0);
-                            let dw = app.w as usize;
-                            let dh = app.h as usize;
-                            if annoyed.w == dw && annoyed.h == dh {
-                                app.cat.buf.copy_from_slice(&annoyed.data);
-                            } else {
-                                cat::blit(&mut app.cat.buf, dw, dh, &annoyed.data, annoyed.w, annoyed.h, 0, 0);
-                            }
-                            // Keep cosmetics visible on the annoyed face
-                            if let Some(s) = &app.cat.scarf {
-                                cat::blit(&mut app.cat.buf, dw, dh, &s.data, s.w, s.h, 0, 0);
-                            }
-                            if let Some(b) = &app.cat.bell {
-                                cat::blit(&mut app.cat.buf, dw, dh, &b.data, b.w, b.h, 0, 0);
-                            }
-                            if let Some(t) = &app.cat.tie {
-                                cat::blit(&mut app.cat.buf, dw, dh, &t.data, t.w, t.h, 0, 0);
-                            }
-                            if !app.bits.is_null() {
-                                std::ptr::copy_nonoverlapping(app.cat.buf.as_ptr(), app.bits as *mut u8, app.cat.buf.len());
-                                let pt_dst = POINT { x: app.pos_x, y: app.pos_y };
-                                let size = SIZE { cx: app.w, cy: app.h };
-                                let pt_src = POINT { x: 0, y: 0 };
-                                let blend = windows_sys::Win32::Graphics::Gdi::BLENDFUNCTION {
-                                    BlendOp: 0, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: 1,
-                                };
-                                UpdateLayeredWindow(app.hwnd, app.hdc_screen, &pt_dst, &size, app.hdc_mem, &pt_src, 0, &blend, ULW_ALPHA);
-                            }
-                        }
+                        app.draw_annoyed();
                         return 0;
                     } else {
                         app.annoyed_until = None;
                     }
+                }
+
+                // Skip the frame entirely when nothing needs repainting (idle cat)
+                let mut pt = POINT { x: 0, y: 0 };
+                GetCursorPos(&mut pt);
+                let moved = pt.x != app.mouse_pt.x || pt.y != app.mouse_pt.y;
+                app.mouse_pt = pt;
+                if !app.cat.tick(moved) {
+                    return 0;
                 }
                 app.cat.render(app.pos_x, app.pos_y, app.w, app.h, app.scale, app.hdc_screen, app.hdc_mem, app.bits, app.hwnd);
                 0
@@ -593,6 +736,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                         color: app.color, size_idx: app.size_idx, size_px: app.w, pos_x: app.pos_x, pos_y: app.pos_y,
                         always_on_top: app.always_on_top,
                         cosmetic_bell: app.cosmetic_bell, cosmetic_scarf: app.cosmetic_scarf, cosmetic_tie: app.cosmetic_tie,
+                        hotkeys: app.hotkeys,
                     };
                     config::save_config(&app.config_path, &cfg);
                 }
@@ -628,31 +772,50 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             WM_LBUTTONDOWN => {
                 let mut p = POINT { x: 0, y: 0 };
                 GetCursorPos(&mut p);
-                app.drag_win_x = app.pos_x;
-                app.drag_win_y = app.pos_y;
-                app.drag_mouse_x = p.x;
-                app.drag_mouse_y = p.y;
-                app.drag_active = true;
+                app.press_mouse_x = p.x;
+                app.press_mouse_y = p.y;
+                app.drag_active = false;
+                // Instant feedback: the annoyed face appears immediately on any press;
+                // if this turns into a drag, enter_tilt swaps to the tilted pose right away
+                app.annoyed_until = Some(Instant::now() + std::time::Duration::from_millis(1500));
+                app.draw_annoyed();
                 windows_sys::Win32::UI::Input::KeyboardAndMouse::SetCapture(hwnd);
                 0
             }
             WM_MOUSEMOVE => {
-                if app.drag_active && (wparam as u32 & 1) != 0 {
+                if (wparam as u32 & 1) != 0 {
                     let mut p = POINT { x: 0, y: 0 };
                     GetCursorPos(&mut p);
-                    let nx = app.drag_win_x + (p.x - app.drag_mouse_x);
-                    let ny = app.drag_win_y + (p.y - app.drag_mouse_y);
-                    app.pos_x = nx;
-                    app.pos_y = ny;
-                    SetWindowPos(hwnd, null_mut(), nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+                    if !app.drag_active {
+                        let d = (p.x - app.press_mouse_x).abs() + (p.y - app.press_mouse_y).abs();
+                        if d > 5 {
+                            app.drag_active = true;
+                            app.drag_win_x = app.pos_x;
+                            app.drag_win_y = app.pos_y;
+                            app.drag_mouse_x = p.x;
+                            app.drag_mouse_y = p.y;
+                            // Switch to the tilted pose immediately (no lag from the timer)
+                            app.enter_tilt();
+                        }
+                    }
+                    if app.drag_active {
+                        let nx = app.drag_win_x + (p.x - app.drag_mouse_x);
+                        let ny = app.drag_win_y + (p.y - app.drag_mouse_y);
+                        app.pos_x = nx;
+                        app.pos_y = ny;
+                        SetWindowPos(hwnd, null_mut(), nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+                    }
                 }
                 0
             }
             WM_LBUTTONUP => {
-                if app.drag_active {
-                    app.drag_active = false;
-                    windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+                let was_drag = app.drag_active;
+                app.drag_active = false;
+                if was_drag {
+                    // Restore the normal pose immediately (no resize-lag glitch)
+                    app.exit_tilt();
                 }
+                windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
                 0
             }
             WM_RBUTTONUP => {
@@ -672,6 +835,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     color: app.color, size_idx: app.size_idx, size_px: app.w, pos_x: app.pos_x, pos_y: app.pos_y,
                     always_on_top: app.always_on_top,
                     cosmetic_bell: app.cosmetic_bell, cosmetic_scarf: app.cosmetic_scarf, cosmetic_tie: app.cosmetic_tie,
+                    hotkeys: app.hotkeys,
                 };
                 config::save_config(&app.config_path, &cfg);
                 let data = config::UserData { note: app.note.clone(), todos: app.todos.clone() };
@@ -689,6 +853,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     color: app.color, size_idx: app.size_idx, size_px: app.w, pos_x: app.pos_x, pos_y: app.pos_y,
                     always_on_top: app.always_on_top,
                     cosmetic_bell: app.cosmetic_bell, cosmetic_scarf: app.cosmetic_scarf, cosmetic_tie: app.cosmetic_tie,
+                    hotkeys: app.hotkeys,
                 };
                 config::save_config(&app.config_path, &cfg);
                 let data = config::UserData { note: app.note.clone(), todos: app.todos.clone() };
@@ -700,6 +865,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     color: app.color, size_idx: app.size_idx, size_px: app.w, pos_x: app.pos_x, pos_y: app.pos_y,
                     always_on_top: app.always_on_top,
                     cosmetic_bell: app.cosmetic_bell, cosmetic_scarf: app.cosmetic_scarf, cosmetic_tie: app.cosmetic_tie,
+                    hotkeys: app.hotkeys,
                 };
                 config::save_config(&app.config_path, &cfg);
                 let data = config::UserData { note: app.note.clone(), todos: app.todos.clone() };
@@ -712,7 +878,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 }
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("PANIC: {}\n", info);
+        let panic_log = std::env::temp_dir().join("cocobar_panic.log");
+        std::fs::write(panic_log, &msg).ok();
+        eprintln!("{}", msg);
+    }));
     unsafe {
+        // Single instance: another running copy must not spawn (two cats = lag + crashes)
+        let _mutex = CreateMutexW(null_mut(), 1, wstr("cocoBar_SingleInstance"));
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            return;
+        }
         SetProcessDPIAware();
         InitCommonControlsEx(&INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
@@ -825,11 +1002,15 @@ fn main() {
             exe: std::env::current_exe().unwrap_or_default(),
             menu_hwnd: null_mut(),
             customize_hwnd: null_mut(),
+            settings_hwnd: null_mut(),
             menu_tab: 0,
             note: data.note,
             todos: data.todos,
             drag_active: false,
+            drag_prev: false,
             drag_win_x: 0, drag_win_y: 0, drag_mouse_x: 0, drag_mouse_y: 0,
+            press_mouse_x: 0, press_mouse_y: 0,
+            tilt_restore_w: 0, tilt_restore_h: 0,
             annoyed_until: None,
             prev_mouse_down: false,
             always_on_top: cfg.always_on_top,
@@ -838,10 +1019,15 @@ fn main() {
             cosmetic_tie: cfg.cosmetic_tie,
             status: String::new(),
             menu_timer_id: 0,
+            hotkeys: cfg.hotkeys,
+            settings_scroll: 0,
+            mouse_pt: POINT { x: i32::MIN, y: i32::MIN },
         };
 
         app.cat.rebuild_layers(app.color, app.w, app.h, app.scale);
         app.cat.rebuild_cosmetics(app.cosmetic_bell, app.cosmetic_scarf, app.cosmetic_tie, app.scale);
+        // Pre-warm the tilted-pose layers/cosmetics so the first grab is instant
+        app.cat.ensure_tilted(app.scale * cat::TILT_SCALE_FACTOR);
 
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -870,13 +1056,11 @@ fn main() {
             app.create_desktop_shortcut();
         }
 
-        RegisterHotKey(hwnd, HK_BLACK, MOD_CONTROL | MOD_ALT, 0x42);
-        RegisterHotKey(hwnd, HK_WHITE, MOD_CONTROL | MOD_ALT, 0x57);
-        RegisterHotKey(hwnd, HK_ORANGE, MOD_CONTROL | MOD_ALT, 0x4F);
-        RegisterHotKey(hwnd, HK_SMALL, MOD_CONTROL | MOD_ALT, 0x31);
-        RegisterHotKey(hwnd, HK_MEDIUM, MOD_CONTROL | MOD_ALT, 0x32);
-        RegisterHotKey(hwnd, HK_LARGE, MOD_CONTROL | MOD_ALT, 0x33);
-        RegisterHotKey(hwnd, HK_EXIT, MOD_CONTROL | MOD_ALT, 0x58);
+        for i in 0..7usize {
+            if app.hotkey_enabled(i) {
+                RegisterHotKey(hwnd, (i + 1) as i32, MOD_CONTROL | MOD_ALT, HK_VK[i]);
+            }
+        }
 
         SetTimer(hwnd, TIMER_ID, FRAME_MS, None);
 

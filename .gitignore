@@ -12,3 +12,9 @@ Desktop.ini
 # Build artifacts
 *.exe
 *.ico.tmp
+*.log
+
+# Development tools & scratch assets
+dev_assets/
+dev_tools/
+scratch/
