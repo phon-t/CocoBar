@@ -1,6 +1,6 @@
 [package]
 name = "cocobar"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 
 [dependencies]
@@ -12,6 +12,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
+    "Win32_System_Time",
     "Win32_System_SystemServices",
     "Win32_UI_Controls",
     "Win32_UI_Shell",

@@ -6,13 +6,9 @@ use std::ptr::{null, null_mut};
 use std::time::Instant;
 use windows_sys::Win32::Foundation::{HWND, POINT, SIZE};
 use windows_sys::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
-    CreateDIBSection, DIB_RGB_COLORS, RGBQUAD,
+    CreateDIBSection, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, RGBQUAD,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
-    UpdateLayeredWindow, ULW_ALPHA,
-};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, UpdateLayeredWindow, ULW_ALPHA};
 
 pub(crate) const CONTENT_X: i32 = 364;
 pub(crate) const CONTENT_Y: i32 = 148;
@@ -23,8 +19,18 @@ pub(crate) const TILT_X: i32 = 84;
 pub(crate) const TILT_Y: i32 = 63;
 pub(crate) const TILT_W: i32 = 1858;
 pub(crate) const TILT_H: i32 = 1834;
+// The tail reaches below the cropped artwork. Keep that space in the window,
+// rather than clipping the last segment against the asset's crop rectangle.
+pub(crate) const TILT_CANVAS_H: i32 = 1980;
 // The raw tilted canvas reads bigger than the normal one - draw it a touch smaller
 pub(crate) const TILT_SCALE_FACTOR: f32 = 0.90;
+
+pub(crate) fn tilted_scale(normal_scale: f32) -> f32 {
+    (TILT_W as f32 * normal_scale * TILT_SCALE_FACTOR)
+        .round()
+        .max(1.0)
+        / TILT_W as f32
+}
 
 // --- Cartoon tail (attached at the user's pink mark on the tilted cat's butt) ---
 // Anchor is in TILT-layer coords. The pink mark (513,1714) is 240px INSIDE the body,
@@ -39,7 +45,7 @@ const TAIL_BORDER_W: f32 = 16.0; // matching asset border thickness
 const TAIL_DAMP: f32 = 0.88; // responsive springy cartoon sway
 const TAIL_GRAV: f32 = 1100.0; // weight pulling downward under gravity
 const TAIL_MAX_SPEED: f32 = 140.0; // canvas px/frame velocity clamp
-const TAIL_GROUND_Y: f32 = 1960.0; // allows tail to hang down naturally from butt
+const TAIL_GROUND_Y: f32 = TILT_CANVAS_H as f32 - 8.0;
 const TAIL_AX: f32 = 470.0; // shifted slightly right on the butt
 const TAIL_AY: f32 = 1690.0;
 pub(crate) const MAX_OFF_X: f32 = 85.0;
@@ -68,20 +74,50 @@ const SPIRAL_LEFT: &[u8] = include_bytes!("../assets/spiralpupilleft.png");
 const SPIRAL_RIGHT: &[u8] = include_bytes!("../assets/spiralpupilright.png");
 
 const TILTED_SCARF_ITEMS: &[super::cosmetics::CosmeticItem] = &[
-    super::cosmetics::CosmeticItem { name: "Tilted Black Scarf", bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedscarf/tiltedscarfblack.png") },
-    super::cosmetics::CosmeticItem { name: "Tilted Red Scarf", bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedscarf/tiltedscarfred.png") },
-    super::cosmetics::CosmeticItem { name: "Tilted Blue Scarf", bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedscarf/tiltedscarfblue.png") },
-    super::cosmetics::CosmeticItem { name: "Tilted Pink Scarf", bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedscarf/tiltedscarfpink.png") },
-    super::cosmetics::CosmeticItem { name: "Tilted White Scarf", bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedscarf/tiltedscarfwhite.png") },
+    super::cosmetics::CosmeticItem {
+        name: "Tilted Black Scarf",
+        bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedscarf/tiltedscarfblack.png"),
+    },
+    super::cosmetics::CosmeticItem {
+        name: "Tilted Red Scarf",
+        bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedscarf/tiltedscarfred.png"),
+    },
+    super::cosmetics::CosmeticItem {
+        name: "Tilted Blue Scarf",
+        bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedscarf/tiltedscarfblue.png"),
+    },
+    super::cosmetics::CosmeticItem {
+        name: "Tilted Pink Scarf",
+        bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedscarf/tiltedscarfpink.png"),
+    },
+    super::cosmetics::CosmeticItem {
+        name: "Tilted White Scarf",
+        bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedscarf/tiltedscarfwhite.png"),
+    },
 ];
 const TILTED_BELL_ITEMS: &[super::cosmetics::CosmeticItem] = &[
-    super::cosmetics::CosmeticItem { name: "Tilted Black Bell", bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedbell/tiltedbellblack.png") },
-    super::cosmetics::CosmeticItem { name: "Tilted Red Bell", bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedbell/tiltedbellred.png") },
+    super::cosmetics::CosmeticItem {
+        name: "Tilted Black Bell",
+        bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedbell/tiltedbellblack.png"),
+    },
+    super::cosmetics::CosmeticItem {
+        name: "Tilted Red Bell",
+        bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedbell/tiltedbellred.png"),
+    },
 ];
 const TILTED_TIE_ITEMS: &[super::cosmetics::CosmeticItem] = &[
-    super::cosmetics::CosmeticItem { name: "Tilted Blue Tie", bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedtie/tiltedtieblue.png") },
-    super::cosmetics::CosmeticItem { name: "Tilted Orange Tie", bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedtie/tiltedtieorange.png") },
-    super::cosmetics::CosmeticItem { name: "Tilted Red Tie", bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedtie/tiltedtiered.png") },
+    super::cosmetics::CosmeticItem {
+        name: "Tilted Blue Tie",
+        bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedtie/tiltedtieblue.png"),
+    },
+    super::cosmetics::CosmeticItem {
+        name: "Tilted Orange Tie",
+        bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedtie/tiltedtieorange.png"),
+    },
+    super::cosmetics::CosmeticItem {
+        name: "Tilted Red Tie",
+        bytes: include_bytes!("../assets/Cat tilted cosmetics/tiltedtie/tiltedtiered.png"),
+    },
 ];
 
 #[derive(Clone)]
@@ -89,6 +125,381 @@ pub(crate) struct Layer {
     pub w: usize,
     pub h: usize,
     pub data: Vec<u8>,
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn renderer() -> CatRenderer {
+        let mut cat = CatRenderer::new();
+        cat.blink_next = Instant::now() + Duration::from_secs(3600);
+        cat.rebuild_layers(0, 180, 264, 180.0 / CONTENT_W as f32);
+        cat
+    }
+
+    fn frame(cat: &mut CatRenderer, now: Instant, cursor: POINT, tilted: bool) -> (usize, usize) {
+        let scale = if tilted {
+            tilted_scale(cat.built_scale)
+        } else {
+            cat.built_scale
+        };
+        let (w, h) = if tilted {
+            (
+                (TILT_W as f32 * scale).round() as i32,
+                (TILT_CANVAS_H as f32 * scale).round() as i32,
+            )
+        } else {
+            (cat.base.w as i32, cat.base.h as i32)
+        };
+        cat.compose_frame(0, 0, w, h, scale, cursor, now);
+        assert_eq!(cat.buf.len(), (w * h * 4) as usize);
+        assert!(
+            cat.buf.chunks_exact(4).filter(|p| p[3] > 0).count() > (w * h / 4) as usize,
+            "The current pose must contain a visible cat"
+        );
+        (w as usize, h as usize)
+    }
+
+    fn save_frame(cat: &CatRenderer, size: (usize, usize), name: &str) {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/animation-check");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut rgba = cat.buf.clone();
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            if pixel[3] > 0 {
+                for channel in 0..3 {
+                    pixel[channel] =
+                        ((pixel[channel] as u32 * 255) / pixel[3] as u32).min(255) as u8;
+                }
+            }
+        }
+        image::save_buffer(
+            dir.join(format!("{name}.png")),
+            &rgba,
+            size.0 as u32,
+            size.1 as u32,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+    }
+
+    fn assert_outfit(cat: &CatRenderer, size: (usize, usize), tilted: bool) {
+        let layers = if tilted {
+            [&cat.tilt_scarf, &cat.tilt_bell, &cat.tilt_tie]
+        } else {
+            [&cat.scarf, &cat.bell, &cat.tie]
+        };
+        let mut expected = vec![0; cat.buf.len()];
+        for layer in layers.into_iter().flatten() {
+            blit(
+                &mut expected,
+                size.0,
+                size.1,
+                &layer.data,
+                layer.w,
+                layer.h,
+                0,
+                0,
+            );
+        }
+        let mut visible = 0;
+        for (outfit, actual) in expected.chunks_exact(4).zip(cat.buf.chunks_exact(4)) {
+            if outfit[3] == 255 {
+                visible += 1;
+                assert_eq!(
+                    outfit, actual,
+                    "Opaque outfit pixels must survive the reaction"
+                );
+            }
+        }
+        assert!(
+            visible > 0,
+            "Selected accessories must render visible pixels"
+        );
+    }
+
+    #[test]
+    fn normal_reactions_for_all_colors_preserve_accessories() {
+        let mut cat = renderer();
+        let start = Instant::now();
+        let center = POINT { x: 90, y: 132 };
+        for (color, name) in ["black", "white", "orange"].iter().enumerate() {
+            let now = start + Duration::from_secs(color as u64 * 10);
+            cat.rebuild_layers(color, 180, 264, cat.built_scale);
+            cat.rebuild_cosmetics(Some(1), Some(1), None, cat.built_scale);
+            cat.off_x = 0.0;
+            cat.off_y = 0.0;
+            let size = frame(&mut cat, now, center, false);
+            let normal = cat.buf.clone();
+            assert_outfit(&cat, size, false);
+            save_frame(&cat, size, &format!("{name}-normal"));
+            frame(
+                &mut cat,
+                now + Duration::from_millis(16),
+                POINT { x: 900, y: 132 },
+                false,
+            );
+            assert!(cat.off_x > 0.0, "Eyes follow a cursor to the right");
+            for i in 2..32 {
+                frame(
+                    &mut cat,
+                    now + Duration::from_millis(i * 16),
+                    POINT { x: -900, y: 132 },
+                    false,
+                );
+            }
+            assert!(cat.off_x < 0.0, "Eyes follow a cursor to the left");
+            assert!(
+                cat.off_x.hypot(cat.off_y) <= MAX_OFF_Y,
+                "Pupils stay inside their sockets"
+            );
+            save_frame(&cat, size, &format!("{name}-tracking"));
+            cat.off_x = 0.0;
+            cat.off_y = 0.0;
+            cat.blink_start = Some(now + Duration::from_secs(1));
+            frame(&mut cat, now + Duration::from_millis(1130), center, false);
+            assert_ne!(
+                cat.buf, normal,
+                "The closed-eye frame differs from the open-eye frame"
+            );
+            assert_outfit(&cat, size, false);
+            save_frame(&cat, size, &format!("{name}-blink"));
+            frame(&mut cat, now + Duration::from_millis(1300), center, false);
+            assert!(cat.blink_start.is_none());
+            assert_eq!(cat.buf, normal, "A blink returns to the normal face");
+            cat.set_look_down();
+            cat.look_down_start = Some(now + Duration::from_secs(2));
+            frame(&mut cat, now + Duration::from_millis(2700), center, false);
+            assert_ne!(
+                cat.buf, normal,
+                "Applying an accessory produces a downward glance"
+            );
+            assert_outfit(&cat, size, false);
+            save_frame(&cat, size, &format!("{name}-glance"));
+            frame(&mut cat, now + Duration::from_millis(3100), center, false);
+            assert!(cat.look_down_start.is_none());
+            assert_eq!(
+                cat.buf, normal,
+                "The accessory glance returns to normal tracking"
+            );
+            assert!(cat.compose_annoyed(size.0, size.1));
+            assert_ne!(cat.buf, normal, "Click feedback renders an annoyed face");
+            assert_outfit(&cat, size, false);
+            save_frame(&cat, size, &format!("{name}-annoyed"));
+            frame(&mut cat, now + Duration::from_secs(4), center, false);
+            assert_eq!(
+                cat.buf, normal,
+                "Normal rendering restores the face after the click reaction"
+            );
+            cat.drag_active = true;
+            let tilted_size = frame(&mut cat, now + Duration::from_secs(5), center, true);
+            assert_outfit(&cat, tilted_size, true);
+            save_frame(&cat, tilted_size, &format!("{name}-tilted"));
+            cat.drag_active = false;
+            frame(&mut cat, now + Duration::from_secs(6), center, false);
+            assert_eq!(
+                cat.buf, normal,
+                "Each cat color returns from the tilted pose"
+            );
+        }
+    }
+
+    #[test]
+    fn dragging_dizzy_recovery_and_slow_frames() {
+        let mut cat = renderer();
+        cat.rebuild_cosmetics(Some(1), Some(1), None, cat.built_scale);
+        let now = Instant::now();
+        let center = POINT { x: 90, y: 132 };
+        frame(&mut cat, now, center, false);
+        let normal = cat.buf.clone();
+        cat.drag_active = true;
+        let size = frame(&mut cat, now + Duration::from_millis(16), center, true);
+        assert!(cat.tail.ready, "Dragging starts the hanging tail");
+        assert!(cat.tilt_pupil.is_some());
+        assert_outfit(&cat, size, true);
+        save_frame(&cat, size, "drag-tilted");
+        for i in 1..=4 {
+            frame(
+                &mut cat,
+                now + Duration::from_millis(16 + i * 100),
+                POINT {
+                    x: 90 + i as i32 * 25,
+                    y: 132,
+                },
+                true,
+            );
+        }
+        assert!(
+            !cat.fast_drag,
+            "A slow drag stays calm even with delayed frames"
+        );
+        cat.drag_active = false;
+        frame(&mut cat, now + Duration::from_millis(432), center, false);
+        assert!(
+            cat.spiral_start.is_none(),
+            "An ordinary drop does not trigger dizziness"
+        );
+        cat.drag_active = true;
+        frame(&mut cat, now + Duration::from_millis(448), center, true);
+        for i in 1..=4 {
+            frame(
+                &mut cat,
+                now + Duration::from_millis(448 + i * 16),
+                POINT {
+                    x: 90 + i as i32 * 40,
+                    y: 132,
+                },
+                true,
+            );
+        }
+        assert!(
+            cat.fast_drag,
+            "Sustained fast movement arms the dizzy reaction"
+        );
+        cat.drag_active = false;
+        let size = frame(&mut cat, now + Duration::from_millis(528), center, false);
+        assert!(cat.spiral_start.is_some());
+        assert_eq!(cat.spiral_left.as_ref().unwrap().len(), 12);
+        assert_ne!(cat.buf, normal);
+        assert_outfit(&cat, size, false);
+        save_frame(&cat, size, "drag-dizzy");
+        let expiry = cat.spiral_start.unwrap() + Duration::from_secs_f32(cat.spiral_dur + 0.4);
+        cat.off_x = 0.0;
+        cat.off_y = 0.0;
+        frame(&mut cat, expiry, center, false);
+        assert!(
+            cat.spiral_start.is_none(),
+            "Dizzy eyes expire after their fade"
+        );
+        assert_eq!(
+            cat.buf, normal,
+            "Dropping restores the normal canvas and outfit"
+        );
+        cat.spiral_start = Some(expiry);
+        cat.drag_active = true;
+        frame(&mut cat, expiry + Duration::from_millis(16), center, true);
+        assert!(
+            cat.spiral_start.is_none(),
+            "A fresh grab clears the previous dizzy reaction"
+        );
+        cat.drag_active = false;
+        frame(&mut cat, expiry + Duration::from_millis(32), center, false);
+        assert!(cat.spiral_start.is_none());
+    }
+
+    #[test]
+    fn every_accessory_renders_in_normal_and_tilted_poses_after_resize() {
+        let mut cat = renderer();
+        let now = Instant::now();
+        let outfits = (0..5)
+            .map(|i| (None, Some(i), None))
+            .chain((0..2).map(|i| (Some(i), None, None)))
+            .chain((0..3).map(|i| (None, None, Some(i))));
+        for (i, (bell, scarf, tie)) in outfits.enumerate() {
+            let width = if i % 2 == 0 { 120 } else { 200 };
+            let scale = width as f32 / CONTENT_W as f32;
+            cat.rebuild_layers(0, width, (CONTENT_H as f32 * scale).round() as i32, scale);
+            cat.rebuild_cosmetics(bell, scarf, tie, scale);
+            cat.drag_active = false;
+            let t = now + Duration::from_secs(i as u64 * 2);
+            let center_y = cat.base.h as i32 / 2;
+            let size = frame(
+                &mut cat,
+                t,
+                POINT {
+                    x: width / 2,
+                    y: center_y,
+                },
+                false,
+            );
+            assert_outfit(&cat, size, false);
+            cat.drag_active = true;
+            let size = frame(
+                &mut cat,
+                t + Duration::from_millis(16),
+                POINT { x: 0, y: 0 },
+                true,
+            );
+            assert_outfit(&cat, size, true);
+        }
+        cat.rebuild_cosmetics(None, None, None, cat.built_scale);
+        cat.ensure_tilted(tilted_scale(cat.built_scale));
+        assert!(cat.scarf.is_none() && cat.bell.is_none() && cat.tie.is_none());
+        assert!(cat.tilt_scarf.is_none() && cat.tilt_bell.is_none() && cat.tilt_tie.is_none());
+    }
+
+    #[test]
+    fn idle_throttling_keeps_reactions_animating() {
+        let mut cat = CatRenderer::new();
+        cat.blink_next = Instant::now() + Duration::from_secs(60);
+        cat.cursor_still = 2.0;
+        assert_eq!((0..32).filter(|_| cat.tick(false)).count(), 4);
+        assert!(cat.tick(true), "Cursor movement immediately wakes tracking");
+        cat.cursor_still = 2.0;
+        cat.blink_start = Some(Instant::now());
+        assert!(cat.tick(false));
+        cat.blink_start = None;
+        cat.set_look_down();
+        assert!(cat.tick(false));
+        cat.look_down_start = None;
+        cat.drag_active = true;
+        assert!(cat.tick(false));
+        cat.drag_active = false;
+        cat.spiral_start = Some(Instant::now());
+        assert!(cat.tick(false));
+    }
+
+    #[test]
+    fn tail_trails_the_drag_settles_and_keeps_its_tip_inside_the_canvas() {
+        let mut tail = Tail::new();
+        for _ in 0..240 {
+            tail.update(TAIL_AX, TAIL_AY, 0.0, 0.0, 0.016);
+        }
+        let resting_x = tail.pts.last().unwrap().x;
+        tail.update(TAIL_AX, TAIL_AY, 40.0, 0.0, 0.016);
+        assert!(
+            tail.pts.last().unwrap().x < resting_x,
+            "Moving right makes the tail trail to the left"
+        );
+        for i in 0..720 {
+            let delta = if i < 360 {
+                if i % 2 == 0 {
+                    600.0
+                } else {
+                    -600.0
+                }
+            } else {
+                0.0
+            };
+            let dt = if i % 3 == 0 { 0.032 } else { 0.008 };
+            tail.update(TAIL_AX, TAIL_AY, delta, delta / 3.0, dt);
+            assert!((tail.pts[0].x - TAIL_AX).abs() < 0.001);
+            assert!((tail.pts[0].y - TAIL_AY).abs() < 0.001);
+            for (index, point) in tail.pts.iter().enumerate() {
+                assert!(point.x.is_finite() && point.y.is_finite());
+                let radius = TAIL_BASE_R
+                    + (TAIL_TIP_R - TAIL_BASE_R) * index as f32 / (TAIL_SEGMENTS - 1) as f32
+                    + TAIL_BORDER_W;
+                assert!(point.x - radius >= 0.0 && point.x + radius < TILT_W as f32);
+                assert!(
+                    point.y + radius < TILT_CANVAS_H as f32,
+                    "The entire tail tip and border fit inside the window"
+                );
+            }
+            for points in tail.pts.windows(2) {
+                assert!(
+                    (points[1].x - points[0].x).hypot(points[1].y - points[0].y) < TAIL_REST * 1.2,
+                    "Fast movement must not stretch the tail segments apart"
+                );
+            }
+        }
+        assert!(
+            (tail.pts.last().unwrap().x - TAIL_AX).abs() < 10.0,
+            "The tail settles after the drag stops"
+        );
+    }
 }
 
 impl Layer {
@@ -133,7 +544,12 @@ fn load_cos_layer(
         *idx = want;
         debug_assert_eq!((w, h), (crop.2 as u32, crop.3 as u32));
     }
-    Some(load_layer_cached(cache, crop.2 as u32, crop.3 as u32, scale))
+    Some(load_layer_cached(
+        cache,
+        crop.2 as u32,
+        crop.3 as u32,
+        scale,
+    ))
 }
 
 fn rotate_layer_nearest(src: &Layer, angle_deg: f32, cx: f32, cy: f32) -> Layer {
@@ -161,15 +577,12 @@ fn rotate_layer_nearest(src: &Layer, angle_deg: f32, cx: f32, cy: f32) -> Layer 
     out
 }
 
-pub(crate) fn decode_and_crop(
-    bytes: &[u8],
-    crop: (i32, i32, i32, i32),
-) -> (Vec<u8>, u32, u32) {
+pub(crate) fn decode_and_crop(bytes: &[u8], crop: (i32, i32, i32, i32)) -> (Vec<u8>, u32, u32) {
     let img = load_from_memory_with_format(bytes, ImageFormat::Png)
         .expect("png decode")
         .to_rgba8();
-    let cropped = image::imageops::crop(
-        &mut img.clone(),
+    let cropped = image::imageops::crop_imm(
+        &img,
         crop.0 as u32,
         crop.1 as u32,
         crop.2 as u32,
@@ -188,8 +601,10 @@ pub(crate) fn load_layer_cached(
 ) -> Layer {
     let dw = (cached_w as f32 * scale).round().max(1.0) as u32;
     let dh = (cached_h as f32 * scale).round().max(1.0) as u32;
-    let mut img = image::RgbaImage::from_raw(cached_w, cached_h, cached_rgba.to_vec()).unwrap();
-    let resized = image::imageops::resize(&mut img, dw, dh, FilterType::Triangle);
+    let img =
+        image::ImageBuffer::<image::Rgba<u8>, &[u8]>::from_raw(cached_w, cached_h, cached_rgba)
+            .unwrap();
+    let resized = image::imageops::resize(&img, dw, dh, FilterType::Triangle);
     let (w, h) = resized.dimensions();
     rgba_to_layer(resized.into_raw(), w as usize, h as usize)
 }
@@ -264,17 +679,28 @@ struct TailPt {
 pub(crate) struct Tail {
     pts: Vec<TailPt>,
     ready: bool,
+    step_dt: f32,
 }
 
 impl Tail {
     fn new() -> Self {
         Self {
-            pts: vec![TailPt { x: 0.0, y: 0.0, px: 0.0, py: 0.0 }; TAIL_SEGMENTS],
+            pts: vec![
+                TailPt {
+                    x: 0.0,
+                    y: 0.0,
+                    px: 0.0,
+                    py: 0.0
+                };
+                TAIL_SEGMENTS
+            ],
             ready: false,
+            step_dt: super::FRAME_MS as f32 / 4000.0,
         }
     }
     pub(crate) fn reset(&mut self) {
         self.ready = false;
+        self.step_dt = super::FRAME_MS as f32 / 4000.0;
     }
     /// Verlet physics in TILT-layer coordinate space. Anchor (ax, ay) in layer coords.
     /// Incorporates window dragging velocity (win_dx, win_dy) to give drag momentum.
@@ -290,21 +716,26 @@ impl Tail {
             }
             self.ready = true;
         } else if win_dx != 0.0 || win_dy != 0.0 {
-            // Apply drag motion inertia so the tail lags behind the drag direction
+            // Moving the window shifts free tail points in the opposite local
+            // direction. Shift both current/previous positions to preserve their
+            // velocity, and cap a teleport's impulse to avoid a violent snap.
+            let distance = win_dx.hypot(win_dy).max(1.0);
+            let amount = (TAIL_REST * 3.0 / distance).min(1.0);
             for i in 1..TAIL_SEGMENTS {
-                self.pts[i].x += win_dx;
-                self.pts[i].y += win_dy;
-                self.pts[i].px += win_dx * 1.45;
-                self.pts[i].py += win_dy * 1.45;
+                self.pts[i].x -= win_dx * amount;
+                self.pts[i].y -= win_dy * amount;
+                self.pts[i].px -= win_dx * amount;
+                self.pts[i].py -= win_dy * amount;
             }
         }
         const SUBSTEPS: usize = 4;
-        let h = dt / SUBSTEPS as f32;
+        let h = dt.clamp(0.001, 1.0 / 30.0) / SUBSTEPS as f32;
         let h2 = h * h;
-        let damp = TAIL_DAMP.powf(1.0 / SUBSTEPS as f32);
+        let damp = TAIL_DAMP.powf(h / (super::FRAME_MS as f32 / 1000.0));
         let grav = TAIL_GRAV * h2;
         let spd = TAIL_MAX_SPEED / SUBSTEPS as f32;
-        for _ in 0..SUBSTEPS {
+        for step in 0..SUBSTEPS {
+            let time_ratio = if step == 0 { h / self.step_dt } else { 1.0 };
             // Pin anchor (segment 0) to butt
             self.pts[0].x = ax;
             self.pts[0].y = ay;
@@ -314,8 +745,8 @@ impl Tail {
             // Verlet integration (gravity)
             for i in 1..TAIL_SEGMENTS {
                 let p = &mut self.pts[i];
-                let mut vx = (p.x - p.px) * damp;
-                let mut vy = (p.y - p.py) * damp;
+                let mut vx = (p.x - p.px) * damp * time_ratio;
+                let mut vy = (p.y - p.py) * damp * time_ratio;
                 let sp = (vx * vx + vy * vy).sqrt();
                 if sp > spd {
                     let k = spd / sp;
@@ -329,7 +760,7 @@ impl Tail {
             }
 
             // Distance constraints (stiff chain for cartoon rope physics)
-            for _ in 0..5 {
+            for _ in 0..12 {
                 self.pts[0].x = ax;
                 self.pts[0].y = ay;
                 for i in 0..TAIL_SEGMENTS - 1 {
@@ -345,14 +776,14 @@ impl Tail {
                         self.pts[i].x += ox;
                         self.pts[i].y += oy;
                     }
-                    self.pts[i + 1].x -= ox;
-                    self.pts[i + 1].y -= oy;
+                    self.pts[i + 1].x -= if i == 0 { ox * 2.0 } else { ox };
+                    self.pts[i + 1].y -= if i == 0 { oy * 2.0 } else { oy };
                 }
                 self.pts[0].x = ax;
                 self.pts[0].y = ay;
             }
 
-            // Ground: the tail's bottom edge rests on the window bottom
+            // Leave a margin for the tip's border and antialiasing.
             for i in 1..TAIL_SEGMENTS {
                 let t = i as f32 / (TAIL_SEGMENTS - 1) as f32;
                 let r = TAIL_BASE_R + (TAIL_TIP_R - TAIL_BASE_R) * t + TAIL_BORDER_W;
@@ -365,6 +796,7 @@ impl Tail {
                 }
             }
         }
+        self.step_dt = h;
     }
 }
 
@@ -398,11 +830,18 @@ fn fill_circle(buf: &mut [u8], bw: usize, bh: usize, cx: i32, cy: i32, r: i32, c
     }
 }
 
-fn fill_quad(buf: &mut [u8], bw: usize, bh: usize,
-    x0: f32, y0: f32, r0: f32,
-    x1: f32, y1: f32, r1: f32,
-    c: [u8; 4])
-{
+fn fill_quad(
+    buf: &mut [u8],
+    bw: usize,
+    bh: usize,
+    x0: f32,
+    y0: f32,
+    r0: f32,
+    x1: f32,
+    y1: f32,
+    r1: f32,
+    c: [u8; 4],
+) {
     let ddx = x1 - x0;
     let ddy = y1 - y0;
     if !ddx.is_finite() || !ddy.is_finite() {
@@ -412,7 +851,9 @@ fn fill_quad(buf: &mut [u8], bw: usize, bh: usize,
     if len < 0.5 {
         // Degenerate quad (points stacked): draw a circle at the midpoint instead
         fill_circle(
-            buf, bw, bh,
+            buf,
+            bw,
+            bh,
             ((x0 + x1) * 0.5).round() as i32,
             ((y0 + y1) * 0.5).round() as i32,
             ((r0 + r1) * 0.5).round() as i32,
@@ -422,10 +863,14 @@ fn fill_quad(buf: &mut [u8], bw: usize, bh: usize,
     }
     let nx = -ddy / len;
     let ny = ddx / len;
-    let ax = x0 + nx * r0; let ay = y0 + ny * r0;
-    let bx = x0 - nx * r0; let by = y0 - ny * r0;
-    let ccx = x1 + nx * r1; let ccy = y1 + ny * r1;
-    let ddx2 = x1 - nx * r1; let ddy2 = y1 - ny * r1;
+    let ax = x0 + nx * r0;
+    let ay = y0 + ny * r0;
+    let bx = x0 - nx * r0;
+    let by = y0 - ny * r0;
+    let ccx = x1 + nx * r1;
+    let ccy = y1 + ny * r1;
+    let ddx2 = x1 - nx * r1;
+    let ddy2 = y1 - ny * r1;
     let min_x = ax.min(bx).min(ccx).min(ddx2).max(0.0) as i32;
     let max_x = ax.max(bx).max(ccx).max(ddx2).min(bw as f32 - 1.0) as i32;
     let min_y = ay.min(by).min(ccy).min(ddy2).max(0.0) as i32;
@@ -446,7 +891,8 @@ fn fill_quad(buf: &mut [u8], bw: usize, bh: usize,
             let pxf = px as f32 + 0.5;
             let pyf = py as f32 + 0.5;
             if in_tri(pxf, pyf, ax, ay, bx, by, ccx, ccy)
-                || in_tri(pxf, pyf, bx, by, ccx, ccy, ddx2, ddy2) {
+                || in_tri(pxf, pyf, bx, by, ccx, ccy, ddx2, ddy2)
+            {
                 let idx = (py as usize * bw + px as usize) * 4;
                 buf[idx] = c[2];
                 buf[idx + 1] = c[1];
@@ -461,10 +907,14 @@ fn fill_quad_4pts(
     buf: &mut [u8],
     bw: usize,
     bh: usize,
-    ax: f32, ay: f32,
-    bx: f32, by: f32,
-    cx: f32, cy: f32,
-    dx: f32, dy: f32,
+    ax: f32,
+    ay: f32,
+    bx: f32,
+    by: f32,
+    cx: f32,
+    cy: f32,
+    dx: f32,
+    dy: f32,
     c: [u8; 4],
 ) {
     if bw == 0 || bh == 0 {
@@ -491,8 +941,8 @@ fn fill_quad_4pts(
         for px in min_x..=max_x {
             let pxf = px as f32 + 0.5;
             let pyf = py as f32 + 0.5;
-            if in_tri(pxf, pyf, ax, ay, bx, by, cx, cy)
-                || in_tri(pxf, pyf, bx, by, cx, cy, dx, dy) {
+            if in_tri(pxf, pyf, ax, ay, bx, by, cx, cy) || in_tri(pxf, pyf, bx, by, cx, cy, dx, dy)
+            {
                 let idx = (py as usize * bw + px as usize) * 4;
                 buf[idx] = c[2];
                 buf[idx + 1] = c[1];
@@ -546,9 +996,15 @@ fn draw_tail(buf: &mut [u8], bw: usize, bh: usize, tail: &Tail, color: usize, sc
         let r0 = get_radius(i) + bw2;
         let r1 = get_radius(i + 1) + bw2;
         fill_quad(
-            buf, bw, bh,
-            tail.pts[i].x * s, tail.pts[i].y * s, r0,
-            tail.pts[i + 1].x * s, tail.pts[i + 1].y * s, r1,
+            buf,
+            bw,
+            bh,
+            tail.pts[i].x * s,
+            tail.pts[i].y * s,
+            r0,
+            tail.pts[i + 1].x * s,
+            tail.pts[i + 1].y * s,
+            r1,
             bdr,
         );
     }
@@ -565,9 +1021,15 @@ fn draw_tail(buf: &mut [u8], bw: usize, bh: usize, tail: &Tail, color: usize, sc
         let r0 = get_radius(i);
         let r1 = get_radius(i + 1);
         fill_quad(
-            buf, bw, bh,
-            tail.pts[i].x * s, tail.pts[i].y * s, r0,
-            tail.pts[i + 1].x * s, tail.pts[i + 1].y * s, r1,
+            buf,
+            bw,
+            bh,
+            tail.pts[i].x * s,
+            tail.pts[i].y * s,
+            r0,
+            tail.pts[i + 1].x * s,
+            tail.pts[i + 1].y * s,
+            r1,
             body,
         );
     }
@@ -605,17 +1067,25 @@ fn draw_tail(buf: &mut [u8], bw: usize, bh: usize, tail: &Tail, color: usize, sc
                 let w_in = 6.0 * s;
 
                 // Outer dark-brown stripe outline quad
-                let c0x = px - nx * r - ux * w_out; let c0y = py - ny * r - uy * w_out;
-                let c1x = px + nx * r - ux * w_out; let c1y = py + ny * r - uy * w_out;
-                let c2x = px + nx * r + ux * w_out; let c2y = py + ny * r + uy * w_out;
-                let c3x = px - nx * r + ux * w_out; let c3y = py - ny * r + uy * w_out;
+                let c0x = px - nx * r - ux * w_out;
+                let c0y = py - ny * r - uy * w_out;
+                let c1x = px + nx * r - ux * w_out;
+                let c1y = py + ny * r - uy * w_out;
+                let c2x = px + nx * r + ux * w_out;
+                let c2y = py + ny * r + uy * w_out;
+                let c3x = px - nx * r + ux * w_out;
+                let c3y = py - ny * r + uy * w_out;
                 fill_quad_4pts(buf, bw, bh, c0x, c0y, c1x, c1y, c2x, c2y, c3x, c3y, so);
 
                 // Inner amber stripe fill quad
-                let i0x = px - nx * r - ux * w_in; let i0y = py - ny * r - uy * w_in;
-                let i1x = px + nx * r - ux * w_in; let i1y = py + ny * r - uy * w_in;
-                let i2x = px + nx * r + ux * w_in; let i2y = py + ny * r + uy * w_in;
-                let i3x = px - nx * r + ux * w_in; let i3y = py - ny * r + uy * w_in;
+                let i0x = px - nx * r - ux * w_in;
+                let i0y = py - ny * r - uy * w_in;
+                let i1x = px + nx * r - ux * w_in;
+                let i1y = py + ny * r - uy * w_in;
+                let i2x = px + nx * r + ux * w_in;
+                let i2y = py + ny * r + uy * w_in;
+                let i3x = px - nx * r + ux * w_in;
+                let i3y = py - ny * r + uy * w_in;
                 fill_quad_4pts(buf, bw, bh, i0x, i0y, i1x, i1y, i2x, i2y, i3x, i3y, sf);
             }
         }
@@ -638,6 +1108,7 @@ pub(crate) struct CatRenderer {
     pub cos_tie_cache: Vec<u8>,
     pub cos_tie_idx: Option<usize>,
     pub buf: Vec<u8>,
+    scratch: Vec<u8>,
     pub off_x: f32,
     pub off_y: f32,
     pub blink_start: Option<Instant>,
@@ -661,7 +1132,8 @@ pub(crate) struct CatRenderer {
     pub drag_active: bool,
     pub prev_drag: bool,
     pub fast_drag: bool,
-    pub fast_streak: u32,
+    shake_time: f32,
+    frame_time: Option<Instant>,
     pub spiral_start: Option<Instant>,
     pub spiral_dur: f32,
     pub spiral_angle: f32,
@@ -716,6 +1188,7 @@ impl CatRenderer {
             cos_tie_cache: Vec::new(),
             cos_tie_idx: None,
             buf: Vec::new(),
+            scratch: Vec::new(),
             off_x: 0.0,
             off_y: 0.0,
             blink_start: None,
@@ -739,7 +1212,8 @@ impl CatRenderer {
             drag_active: false,
             prev_drag: false,
             fast_drag: false,
-            fast_streak: 0,
+            shake_time: 0.0,
+            frame_time: None,
             spiral_start: None,
             spiral_dur: 2.0,
             spiral_angle: 0.0,
@@ -780,7 +1254,10 @@ impl CatRenderer {
     pub(crate) fn rebuild_layers(&mut self, color: usize, w: i32, h: i32, scale: f32) {
         let color = color.min(2);
         self.color = color;
-        if self.built_color == Some(color) && (self.built_scale - scale).abs() < 0.001 && !self.base.data.is_empty() {
+        if self.built_color == Some(color)
+            && (self.built_scale - scale).abs() < 0.001
+            && !self.base.data.is_empty()
+        {
             return;
         }
         self.built_color = Some(color);
@@ -816,7 +1293,12 @@ impl CatRenderer {
 
         self.base = load_layer_cached(&self.cached_rgba[color], cw, ch, scale);
         self.closed = load_layer_cached(&self.cached_closed[color], cw, ch, scale);
-        self.annoyed = Some(load_layer_cached(&self.cached_annoyed[color], cw, ch, scale));
+        self.annoyed = Some(load_layer_cached(
+            &self.cached_annoyed[color],
+            cw,
+            ch,
+            scale,
+        ));
 
         self.eyes = load_layer_cached(&self.cached_eyes, cw, ch, scale);
         self.hl = load_layer_cached(&self.cached_hl, cw, ch, scale);
@@ -871,6 +1353,28 @@ impl CatRenderer {
 
     pub(crate) fn set_look_down(&mut self) {
         self.look_down_start = Some(Instant::now());
+    }
+
+    pub(crate) fn compose_annoyed(&mut self, w: usize, h: usize) -> bool {
+        let Some(annoyed) = &self.annoyed else {
+            return false;
+        };
+        self.buf.resize(w * h * 4, 0);
+        self.buf.fill(0);
+        blit(
+            &mut self.buf,
+            w,
+            h,
+            &annoyed.data,
+            annoyed.w,
+            annoyed.h,
+            0,
+            0,
+        );
+        for layer in [&self.scarf, &self.bell, &self.tie].into_iter().flatten() {
+            blit(&mut self.buf, w, h, &layer.data, layer.w, layer.h, 0, 0);
+        }
+        true
     }
 
     pub(crate) fn ensure_tilted(&mut self, scale: f32) {
@@ -1032,9 +1536,9 @@ impl CatRenderer {
             return true;
         }
         if self.cursor_still > 1.5 {
-            // Idle eye-wandering: run at a throttled ~4 fps so it stays smooth but cheap
+            // Idle eye-wandering: throttle to about 8 fps.
             self.wander_skip += 1;
-            if self.wander_skip < 4 {
+            if self.wander_skip < 8 {
                 return false;
             }
             self.wander_skip = 0;
@@ -1054,6 +1558,50 @@ impl CatRenderer {
         bits: *mut c_void,
         hwnd: HWND,
     ) {
+        let mut cursor = POINT { x: 0, y: 0 };
+        unsafe {
+            GetCursorPos(&mut cursor);
+        }
+        self.compose_frame(pos_x, pos_y, w, h, scale, cursor, Instant::now());
+        if self.buf.len() != (w * h * 4) as usize || bits.is_null() {
+            return;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.buf.as_ptr(), bits as *mut u8, self.buf.len());
+            let source = POINT { x: 0, y: 0 };
+            let size = SIZE { cx: w, cy: h };
+            let blend = BLENDFUNCTION {
+                BlendOp: 0,
+                BlendFlags: 0,
+                SourceConstantAlpha: 255,
+                AlphaFormat: 1,
+            };
+            UpdateLayeredWindow(
+                hwnd,
+                hdc_screen,
+                null(),
+                &size,
+                hdc_mem,
+                &source,
+                0,
+                &blend,
+                ULW_ALPHA,
+            );
+        }
+    }
+
+    // Frame composition takes explicit time/cursor input so animation transitions
+    // can be checked deterministically without manipulating the user's desktop.
+    fn compose_frame(
+        &mut self,
+        pos_x: i32,
+        pos_y: i32,
+        w: i32,
+        h: i32,
+        scale: f32,
+        pt: POINT,
+        now: Instant,
+    ) {
         let bw = w as usize;
         let bh = h as usize;
         let cw = self.base.w;
@@ -1067,12 +1615,6 @@ impl CatRenderer {
         if self.buf.len() != bw * bh * 4 {
             self.buf = vec![0u8; bw * bh * 4];
         }
-
-        let mut pt = POINT { x: 0, y: 0 };
-        unsafe { GetCursorPos(&mut pt) };
-
-        let _screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-        let _screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
 
         let cat_center_x = pos_x as f32 + cw as f32 / 2.0;
         let cat_center_y = pos_y as f32 + ch as f32 / 2.0;
@@ -1096,35 +1638,54 @@ impl CatRenderer {
             }
         }
 
-        let now = Instant::now();
-        let dt = super::FRAME_MS as f32 / 1000.0;
+        let dt = self
+            .frame_time
+            .map(|last| now.saturating_duration_since(last).as_secs_f32())
+            .unwrap_or(super::FRAME_MS as f32 / 1000.0)
+            .clamp(0.001, 0.25);
+        self.frame_time = Some(now);
 
-        let win_dx = if self.pos_initialized { pos_x - self.prev_pos_x } else { 0 };
-        let win_dy = if self.pos_initialized { pos_y - self.prev_pos_y } else { 0 };
+        let win_dx = if self.pos_initialized {
+            pos_x - self.prev_pos_x
+        } else {
+            0
+        };
+        let win_dy = if self.pos_initialized {
+            pos_y - self.prev_pos_y
+        } else {
+            0
+        };
         self.prev_pos_x = pos_x;
         self.prev_pos_y = pos_y;
         self.pos_initialized = true;
 
-        let dx_pos = pt.x - self.cursor_last.x;
-        let dy_pos = pt.y - self.cursor_last.y;
+        let mut dx_pos = pt.x - self.cursor_last.x;
+        let mut dy_pos = pt.y - self.cursor_last.y;
         self.cursor_last = pt;
 
         // Drag & tilt state: show tilted cat while held, spiral eyes after a fast drag
         if self.drag_active != self.prev_drag {
             if self.drag_active {
                 self.fast_drag = false;
-                self.fast_streak = 0;
+                self.shake_time = 0.0;
+                self.spiral_start = None;
+                dx_pos = 0;
+                dy_pos = 0;
                 self.tilt_off_x = 0.0;
                 self.tilt_off_y = 0.0;
                 self.tail.reset();
             } else {
                 if self.fast_drag {
                     self.spiral_start = Some(now);
-                    self.spiral_dur = if rand::rng().random::<bool>() { 2.0 } else { 3.0 };
+                    self.spiral_dur = if rand::rng().random::<bool>() {
+                        2.0
+                    } else {
+                        3.0
+                    };
                     self.spiral_angle = 0.0;
                 }
                 self.fast_drag = false;
-                self.fast_streak = 0;
+                self.shake_time = 0.0;
                 self.tail.reset();
             }
             self.prev_drag = self.drag_active;
@@ -1135,14 +1696,15 @@ impl CatRenderer {
         let mut tilt_active = false;
         if self.drag_active {
             let speed = (dpx * dpx + dpy * dpy).sqrt();
-            // Only "very fast" shakes (sustained, roughly >1100 px/s) arm the spiral eyes
-            if speed > 20.0 {
-                self.fast_streak += 1;
-                if self.fast_streak >= 3 {
+            // Use elapsed time rather than timer tick count: delayed frames must
+            // not turn an ordinary slow drag into a dizzy reaction.
+            if speed / dt > 1100.0 {
+                self.shake_time += dt;
+                if self.shake_time >= 0.048 {
                     self.fast_drag = true;
                 }
             } else {
-                self.fast_streak = 0;
+                self.shake_time = 0.0;
             }
             let m = speed.max(1.0);
             let amp = 7.0 * scale;
@@ -1233,8 +1795,8 @@ impl CatRenderer {
 
         self.buf.iter_mut().for_each(|b| *b = 0);
 
-        let base_x = ((cw as i32 - bw as i32) / 2) as i32;
-        let base_y = ((ch as i32 - bh as i32) / 2) as i32;
+        let base_x = (bw as i32 - cw as i32) / 2;
+        let base_y = (bh as i32 - ch as i32) / 2;
 
         if tilt_active {
             // --- Dragged: tilted cat, pupils drift slightly opposite to motion ---
@@ -1242,7 +1804,11 @@ impl CatRenderer {
             self.ensure_tilted(scale);
             let tilt_ready = self.tilt_layers[self.color]
                 .as_ref()
-                .map(|t| t.w.abs_diff(bw) <= 2 && t.h.abs_diff(bh) <= 2)
+                .map(|t| {
+                    t.w.abs_diff(bw) <= 2
+                        && t.h <= bh
+                        && ((TILT_CANVAS_H as f32 * scale).round() as usize).abs_diff(bh) <= 2
+                })
                 .unwrap_or(false);
             if tilt_ready {
                 // Tail hangs from the butt; physics in canvas coords, drawn behind the body
@@ -1251,7 +1817,8 @@ impl CatRenderer {
                 let ay = TAIL_AY + self.tilt_off_y / sc;
                 let win_dx_l = win_dx as f32 / sc;
                 let win_dy_l = win_dy as f32 / sc;
-                self.tail.update(ax, ay, win_dx_l, win_dy_l, dt);
+                self.tail
+                    .update(ax, ay, win_dx_l, win_dy_l, dt.min(1.0 / 30.0));
                 draw_tail(&mut self.buf, bw, bh, &self.tail, self.color, scale);
                 if let Some(t) = &self.tilt_layers[self.color] {
                     blit(&mut self.buf, bw, bh, &t.data, t.w, t.h, 0, 0);
@@ -1328,7 +1895,8 @@ impl CatRenderer {
 
             if blink_alpha > 0.01 && !spiral_active {
                 let closed_layer = &self.closed;
-                let mut temp = vec![0u8; self.buf.len()];
+                let mut temp = std::mem::take(&mut self.scratch);
+                temp.resize(self.buf.len(), 0);
                 temp.copy_from_slice(&self.buf);
                 blit(
                     &mut temp,
@@ -1351,6 +1919,7 @@ impl CatRenderer {
                     blit(&mut temp, bw, bh, &t.data, t.w, t.h, base_x, base_y);
                 }
                 crossfade(&mut self.buf, &temp, blink_alpha);
+                self.scratch = temp;
             }
 
             // --- Spiral eyes after fast drag, lingering then fading back to real eyes ---
@@ -1364,7 +1933,8 @@ impl CatRenderer {
                 } else {
                     0.0
                 };
-                let normal = self.buf.clone();
+                self.scratch.resize(self.buf.len(), 0);
+                self.scratch.copy_from_slice(&self.buf);
                 blit(
                     &mut self.buf,
                     bw,
@@ -1411,42 +1981,8 @@ impl CatRenderer {
                         );
                     }
                 }
-                crossfade(&mut self.buf, &normal, fade_out);
+                crossfade(&mut self.buf, &self.scratch, fade_out);
             }
-        }
-
-        if !bits.is_null() && !self.buf.is_empty() {
-            unsafe {
-                let dst = std::slice::from_raw_parts_mut(bits as *mut u8, bw * bh * 4);
-                let src_bytes = self.buf.as_ptr();
-                let src_len = self.buf.len();
-                if src_len >= bw * bh * 4 {
-                    std::ptr::copy_nonoverlapping(src_bytes, dst.as_mut_ptr(), bw * bh * 4);
-                }
-            }
-        }
-
-        let pt_src = POINT { x: 0, y: 0 };
-        let size = SIZE { cx: bw as i32, cy: bh as i32 };
-        let blend = BLENDFUNCTION {
-            BlendOp: 0,
-            BlendFlags: 0,
-            SourceConstantAlpha: 255,
-            AlphaFormat: 1,
-        };
-
-        unsafe {
-            UpdateLayeredWindow(
-                hwnd,
-                hdc_screen,
-                null(),
-                &size,
-                hdc_mem,
-                &pt_src,
-                0,
-                &blend,
-                ULW_ALPHA,
-            );
         }
     }
 }

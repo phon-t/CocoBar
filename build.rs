@@ -12,7 +12,7 @@ fn main() {
     res.set_icon(ico_path.to_str().unwrap());
     res.set("FileDescription", "cocoBar - Desktop Cat Companion");
     res.set("ProductName", "cocoBar");
-    res.set("ProductVersion", "0.6.0");
+    res.set("ProductVersion", env!("CARGO_PKG_VERSION"));
     if res.compile().is_err() {
         eprintln!("warning: rc.exe not found; skipping embedded icon resources");
     }
