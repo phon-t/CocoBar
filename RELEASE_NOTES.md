@@ -13,5 +13,3 @@ Saved notes now appear as separate cards with previews and saved dates. Notes au
 - Reduced repeated rendering allocations and kept native UI resources stable.
 
 Download **cocobar.exe** from the release assets and run it directly. Windows 64-bit; no installer needed. Data remains in `%APPDATA%\cocoBar`.
-
-Validated with 25 Rust regression tests, native Windows UI and restart checks, a real GitHub download with matching SHA-256, and isolated install/cancel/rollback tests.
