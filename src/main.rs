@@ -5,6 +5,7 @@ mod config;
 mod cosmetics;
 mod menu;
 mod notes;
+mod placement;
 mod updater;
 
 use std::ffi::c_void;
@@ -33,14 +34,14 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
-    DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, GetWindowLongPtrW,
-    GetWindowRect, LoadCursorW, LoadIconW, PostQuitMessage, RegisterClassExW, SetProcessDPIAware,
-    SetTimer, SetWindowLongPtrW, SetWindowPos, TranslateMessage, UpdateLayeredWindow, CS_DBLCLKS,
-    GWLP_USERDATA, HWND_NOTOPMOST, HWND_TOPMOST, ICONINFO, IDC_ARROW, IDI_APPLICATION, SM_CXSCREEN,
-    SM_CYSCREEN, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, ULW_ALPHA, WM_APP, WM_CLOSE, WM_COMMAND,
-    WM_DESTROY, WM_ENDSESSION, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    DispatchMessageW, GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect, LoadCursorW,
+    LoadIconW, PostQuitMessage, RegisterClassExW, SetProcessDPIAware, SetTimer, SetWindowLongPtrW,
+    SetWindowPos, TranslateMessage, UpdateLayeredWindow, CS_DBLCLKS, GWLP_USERDATA, HWND_NOTOPMOST,
+    HWND_TOPMOST, ICONINFO, IDC_ARROW, IDI_APPLICATION, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    ULW_ALPHA, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DISPLAYCHANGE, WM_ENDSESSION,
+    WM_HOTKEY, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_MOVE, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 pub(crate) const TRAY_ID: usize = 1;
@@ -116,6 +117,7 @@ pub struct App {
     pub todo_page: usize,
     pub todos: Vec<(String, bool)>,
     pub drag_active: bool,
+    pub drag_work_area: Option<RECT>,
     pub drag_win_x: i32,
     pub drag_win_y: i32,
     pub drag_mouse_x: i32,
@@ -182,16 +184,13 @@ impl App {
     }
 
     pub(crate) fn save_settings(&mut self) -> bool {
+        let bounds = self.normal_rect();
         let cfg = config::ConfigData {
             color: self.color,
             size_idx: self.size_idx,
-            size_px: if self.drag_active {
-                self.tilt_restore_w
-            } else {
-                self.w
-            },
-            pos_x: self.pos_x,
-            pos_y: self.pos_y,
+            size_px: bounds.right - bounds.left,
+            pos_x: bounds.left,
+            pos_y: bounds.top,
             always_on_top: self.always_on_top,
             desktop_shortcut: self.desktop_shortcut,
             auto_update: self.auto_update,
@@ -231,32 +230,14 @@ impl App {
         }
         let (min_w, _max_w) = size_limits();
         new_w = new_w.clamp(min_w, size_limits().1);
-        let sw = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-        let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-        let max_w = (sw - 40).max(min_w);
-        let max_h = (sh - 60).max(120);
-        let new_w = new_w.min(max_w);
-        let mut new_h =
-            ((new_w as f32) * cat::CONTENT_H as f32 / cat::CONTENT_W as f32).round() as i32;
+        let work = placement::work_area(&self.normal_rect());
+        let new_h = ((new_w as f32) * cat::CONTENT_H as f32 / cat::CONTENT_W as f32).round() as i32;
         let old_r = self.pos_x + self.w;
         let old_b = self.pos_y + self.h;
-        if new_h > max_h {
-            new_h = max_h;
-            self.w =
-                ((new_h as f32) * cat::CONTENT_W as f32 / cat::CONTENT_H as f32).round() as i32;
-        } else {
-            self.w = new_w;
-        }
-        self.h = new_h;
+        (self.w, self.h) = placement::fit_size(new_w, new_h, &work);
         self.scale = self.w as f32 / cat::CONTENT_W as f32;
-        self.pos_x = old_r - self.w;
-        self.pos_y = old_b - self.h;
-        if self.pos_x < 0 {
-            self.pos_x = 0;
-        }
-        if self.pos_y < 0 {
-            self.pos_y = 0;
-        }
+        (self.pos_x, self.pos_y) =
+            placement::constrain(old_r - self.w, old_b - self.h, self.w, self.h, &work);
         unsafe {
             SetWindowPos(
                 self.hwnd,
@@ -322,23 +303,8 @@ impl App {
     }
 
     fn set_raw_window(&mut self, w: i32, h: i32, content_w: f32) {
-        let (min_w, _) = size_limits();
-        let sw = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-        let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-        let max_w = (sw - 40).max(min_w);
-        let max_h = (sh - 60).max(120);
-        let mut nw = w.max(min_w);
-        let mut nh = h.max(120);
-        if nw > max_w {
-            let k = max_w as f32 / nw as f32;
-            nw = max_w;
-            nh = (nh as f32 * k).round() as i32;
-        }
-        if nh > max_h {
-            let k = max_h as f32 / nh as f32;
-            nh = max_h;
-            nw = (nw as f32 * k).round() as i32;
-        }
+        let nw = w.max(1);
+        let nh = h.max(1);
         self.w = nw;
         self.h = nh;
         self.scale = nw as f32 / content_w;
@@ -364,19 +330,18 @@ impl App {
         let ts = cat::tilted_scale(self.scale);
         let tw = ((cat::TILT_W as f32) * ts).round().max(1.0) as i32;
         let th = ((cat::TILT_CANVAS_H as f32) * ts).round().max(1.0) as i32;
-        // Anchor: keep the cat's bottom edge fixed while the window changes size.
+        // Keep the standing cat's center and bottom fixed across the pose change.
         // The tilted pose only needs the pre-warmed tilt layers + the DIB, so skip
         // the expensive normal-pose layer rebuild for a lag-free drag start.
-        let old_b = self.pos_y + self.h;
+        let (dx, dy) =
+            placement::carry_offset(self.w, self.h, tw, (cat::TILT_H as f32 * ts).round() as i32);
+        self.pos_x -= dx;
+        self.pos_y -= dy;
         self.w = tw;
         self.h = th;
         self.scale = tw as f32 / cat::TILT_W as f32;
         self.rebuild_dib();
         self.cat.ensure_tilted(self.scale);
-        self.pos_y = old_b - (cat::TILT_H as f32 * self.scale).round() as i32;
-        if self.pos_y < 0 {
-            self.pos_y = 0;
-        }
         self.constrain_drag_position();
         self.cat.drag_active = true;
         self.cat.render(
@@ -407,14 +372,25 @@ impl App {
     }
 
     fn exit_tilt(&mut self) {
-        let nw = self.tilt_restore_w.max(100);
-        let nh = self.tilt_restore_h.max(120);
-        let old_b = self.pos_y + (cat::TILT_H as f32 * self.scale).round() as i32;
-        self.set_raw_window(nw, nh, cat::CONTENT_W as f32);
-        self.pos_y = old_b - self.h;
-        if self.pos_y < 0 {
-            self.pos_y = 0;
-        }
+        let nw = self.tilt_restore_w.max(1);
+        let nh = self.tilt_restore_h.max(1);
+        let (dx, dy) = placement::carry_offset(
+            nw,
+            nh,
+            self.w,
+            (cat::TILT_H as f32 * self.scale).round() as i32,
+        );
+        self.pos_x += dx;
+        self.pos_y += dy;
+        let work = self.drag_work_area.take().unwrap_or_else(|| {
+            placement::work_area(&placement::rect(self.pos_x, self.pos_y, nw, nh))
+        });
+        let (w, h) = placement::fit_size(nw, nh, &work);
+        self.pos_x += nw - w;
+        self.pos_y += nh - h;
+        self.set_raw_window(w, h, cat::CONTENT_W as f32);
+        (self.pos_x, self.pos_y) =
+            placement::constrain(self.pos_x, self.pos_y, self.w, self.h, &work);
         self.cat.drag_active = false;
         self.cat.render(
             self.pos_x,
@@ -443,28 +419,46 @@ impl App {
     }
 
     fn constrain_drag_position(&mut self) {
+        let mut cursor = POINT { x: 0, y: 0 };
         unsafe {
-            use windows_sys::Win32::Graphics::Gdi::{
-                GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-            };
-            let monitor = MonitorFromPoint(
-                POINT {
-                    x: self.pos_x + self.w / 2,
-                    y: self.pos_y + self.h / 2,
-                },
-                MONITOR_DEFAULTTONEAREST,
+            GetCursorPos(&mut cursor);
+        }
+        // Follow the cursor's display, not the changing center of the wide
+        // carrying canvas. Clamp the eventual standing footprint instead.
+        let work = placement::cursor_work_area(cursor);
+        self.drag_work_area = Some(work);
+        let bounds = self.normal_rect();
+        let (x, y) = placement::constrain(
+            bounds.left,
+            bounds.top,
+            bounds.right - bounds.left,
+            bounds.bottom - bounds.top,
+            &work,
+        );
+        self.pos_x += x - bounds.left;
+        self.pos_y += y - bounds.top;
+    }
+
+    fn normal_rect(&self) -> RECT {
+        if self.drag_active {
+            let (dx, dy) = placement::carry_offset(
+                self.tilt_restore_w,
+                self.tilt_restore_h,
+                self.w,
+                (cat::TILT_H as f32 * self.scale).round() as i32,
             );
-            let mut info: MONITORINFO = std::mem::zeroed();
-            info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-            if GetMonitorInfoW(monitor, &mut info) != 0 {
-                let work = info.rcWork;
-                self.pos_x = self
-                    .pos_x
-                    .clamp(work.left, (work.right - self.w).max(work.left));
-                self.pos_y = self
-                    .pos_y
-                    .clamp(work.top, (work.bottom - self.h).max(work.top));
-            }
+            let (w, h) = self
+                .drag_work_area
+                .map(|work| placement::fit_size(self.tilt_restore_w, self.tilt_restore_h, &work))
+                .unwrap_or((self.tilt_restore_w, self.tilt_restore_h));
+            placement::rect(
+                self.pos_x + dx + self.tilt_restore_w - w,
+                self.pos_y + dy + self.tilt_restore_h - h,
+                w,
+                h,
+            )
+        } else {
+            placement::rect(self.pos_x, self.pos_y, self.w, self.h)
         }
     }
 
@@ -1087,6 +1081,18 @@ unsafe extern "system" fn wnd_proc(
                 }
                 0
             }
+            WM_DISPLAYCHANGE => {
+                // Recover onto the nearest remaining work area after a display
+                // disconnect/rearrangement, preserving valid negative positions.
+                if app.drag_active {
+                    app.drag_work_area = None;
+                    app.drag_active = false;
+                    app.exit_tilt();
+                    windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+                }
+                app.set_width(app.normal_width());
+                0
+            }
             WM_CLOSE => {
                 if menu::flush_data(app) {
                     DestroyWindow(hwnd);
@@ -1227,43 +1233,29 @@ fn main() {
             }
         };
 
-        let sw = GetSystemMetrics(SM_CXSCREEN);
-        let sh = GetSystemMetrics(SM_CYSCREEN);
-
         let (min_w, max_lim) = size_limits();
-        let mut w = if cfg.size_px > 0 {
+        let requested_w = if cfg.size_px > 0 {
             cfg.size_px.clamp(min_w, max_lim)
         } else {
             SIZES[cfg.size_idx.min(2)].clamp(min_w, max_lim)
         };
-        if w > sw - 40 {
-            w = sw - 40;
-        }
-        if w < min_w {
-            w = min_w;
-        }
-        let mut h = ((w as f32) * cat::CONTENT_H as f32 / cat::CONTENT_W as f32).round() as i32;
-        if h > sh - 80 {
-            h = sh - 80;
-            w = ((h as f32) * cat::CONTENT_W as f32 / cat::CONTENT_H as f32).round() as i32;
-            if w < min_w {
-                w = min_w;
-            }
-        }
+        let requested_h =
+            ((requested_w as f32) * cat::CONTENT_H as f32 / cat::CONTENT_W as f32).round() as i32;
+        let new_position = cfg.pos_x == i32::MIN || cfg.pos_y == i32::MIN;
+        let saved_rect = if new_position {
+            placement::rect(0, 0, 1, 1)
+        } else {
+            placement::rect(cfg.pos_x, cfg.pos_y, requested_w, requested_h)
+        };
+        let work = placement::work_area(&saved_rect);
+        let (w, h) = placement::fit_size(requested_w, requested_h, &work);
         let scale = w as f32 / cat::CONTENT_W as f32;
-        let mut pos_x = cfg.pos_x;
-        let mut pos_y = cfg.pos_y;
-        if pos_x < 0
-            || pos_y < 0
-            || pos_x.saturating_add(w) > sw + 50
-            || pos_y.saturating_add(h) > sh + 50
-        {
-            pos_x = sw - w - 24;
-            pos_y = sh - h - 48;
-            if pos_y < 0 {
-                pos_y = 24;
-            }
-        }
+        let (x, y) = if new_position {
+            (work.right - w - 24, work.bottom - h - 24)
+        } else {
+            (cfg.pos_x, cfg.pos_y)
+        };
+        let (pos_x, pos_y) = placement::constrain(x, y, w, h, &work);
 
         let mut app = App {
             hwnd: null_mut(),
@@ -1298,6 +1290,7 @@ fn main() {
             todo_page: 0,
             todos: data.todos,
             drag_active: false,
+            drag_work_area: None,
             drag_win_x: 0,
             drag_win_y: 0,
             drag_mouse_x: 0,

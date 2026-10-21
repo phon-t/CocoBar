@@ -243,7 +243,16 @@ unsafe fn draw_button(lparam: LPARAM) -> LRESULT {
 
 unsafe fn control_colors(msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let hdc = wparam as HDC;
-    SetBkMode(hdc, TRANSPARENT as i32);
+    // Native edit controls redraw only the changed text range. An opaque
+    // background clears old glyphs on Backspace/Delete and replacement typing.
+    SetBkMode(
+        hdc,
+        if msg == WM_CTLCOLOREDIT {
+            OPAQUE
+        } else {
+            TRANSPARENT
+        } as i32,
+    );
     let id = GetDlgCtrlID(lparam as HWND) as u32;
     if id == LBL_UPDATE_STATUS || id == LBL_NOTES_PAGE {
         SetTextColor(hdc, CLR_TXT_DIM);
@@ -260,7 +269,6 @@ unsafe fn control_colors(msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         },
     );
     SetBkColor(hdc, CLR_WHITE);
-    let _ = msg;
     GetStockObject(WHITE_BRUSH) as LRESULT
 }
 

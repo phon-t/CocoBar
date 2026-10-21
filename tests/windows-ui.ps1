@@ -8,9 +8,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
-Add-Type @'
+Add-Type -ReferencedAssemblies System.dll,System.Core.dll,System.Drawing.dll -TypeDefinition @'
 using System;
 using System.Text;
+using System.Collections.Generic;
+using System.Drawing;
 using System.Runtime.InteropServices;
 public static class CatUi {
     public delegate bool EnumProc(IntPtr hwnd, IntPtr data);
@@ -40,6 +42,14 @@ public static class CatUi {
     [DllImport("user32.dll")] public static extern bool UpdateWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool DestroyWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
+    [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr dest, int x, int y, int w, int h, IntPtr source, int sx, int sy, uint rop);
+    public delegate bool MonitorProc(IntPtr monitor, IntPtr dc, ref Rect bounds, IntPtr data);
+    [DllImport("user32.dll")] public static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr clip, MonitorProc callback, IntPtr data);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+    [StructLayout(LayoutKind.Sequential)] public struct MonitorInfo { public int size; public Rect monitor, work; public uint flags; }
     [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
     [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left, top, right, bottom; }
@@ -63,8 +73,29 @@ public static class CatUi {
         var text = new StringBuilder(SendMessage(hwnd, 0x000E, IntPtr.Zero, IntPtr.Zero).ToInt32() + 1);
         ReadText(hwnd, 0x000D, (IntPtr)text.Capacity, text); return text.ToString();
     }
+    public static Rect[] WorkAreas() {
+        var areas = new List<Rect>();
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr monitor, IntPtr dc, ref Rect bounds, IntPtr data) => {
+            var info = new MonitorInfo(); info.size = Marshal.SizeOf(info);
+            if (GetMonitorInfo(monitor, ref info)) areas.Add(info.work);
+            return true;
+        }, IntPtr.Zero);
+        return areas.ToArray();
+    }
+    public static Bitmap TextSurface(IntPtr edit) {
+        // Read the current native surface. PrintWindow/full invalidation would
+        // repaint it and could conceal the incremental Backspace redraw bug.
+        var bitmap = new Bitmap(180, 24);
+        using (var graphics = Graphics.FromImage(bitmap)) {
+            var target = graphics.GetHdc(); var source = GetDC(edit);
+            try { BitBlt(target, 0, 0, bitmap.Width, bitmap.Height, source, 0, 0, 0x00CC0020); }
+            finally { ReleaseDC(edit, source); graphics.ReleaseHdc(target); }
+        }
+        return bitmap;
+    }
 }
 '@
+[void][CatUi]::SetProcessDPIAware()
 
 function Assert-Ui([bool]$Condition, [string]$Message) {
     if (!$Condition) { throw $Message }
@@ -242,6 +273,32 @@ try {
     $editor = [CatUi]::GetDlgItem($menu, 420)
     Assert-Ui ([CatUi]::Text($editor) -eq 'Legacy note') 'Legacy note text is preserved during migration'
     Assert-Ui ([CatUi]::SendMessage($editor, 0xD5, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64() -gt 32767) 'Notes accept more than 32,767 characters'
+    Edit-Ui $editor 'MMMMMMMMMMMM'
+    [void][CatUi]::UpdateWindow($menu)
+    [void][CatUi]::UpdateWindow($editor)
+    Send-Ui $editor 0xB1 12 12
+    for ($i = 0; $i -lt 9; $i++) { Send-Ui $editor 0x102 8 } # Actual native Backspace
+    Send-Ui $editor 0x102 105 # Type i where a deleted M used to be
+    Assert-Ui ([CatUi]::Text($editor) -ceq 'MMMi') 'Backspace removes letters before replacement typing'
+    $textSurface = [CatUi]::TextSurface($editor)
+    try {
+        $textSurface.Save((Join-Path $outputPath 'notes-backspace.png'))
+        $stalePixels = 0
+        for ($x = 65; $x -lt 165; $x++) {
+            for ($y = 2; $y -lt 20; $y++) {
+                if (($textSurface.GetPixel($x, $y).ToArgb() -band 0xffffff) -ne 0xffffff) { $stalePixels++ }
+            }
+        }
+        Assert-Ui ($stalePixels -eq 0) 'Backspace clears deleted glyphs from the live editor surface'
+    } finally { $textSurface.Dispose() }
+    Send-Ui $editor 0xB1 0 0
+    Send-Ui $editor 0x100 46 # Delete the first M
+    Assert-Ui ([CatUi]::Text($editor) -ceq 'MMi') 'Delete removes the character after the caret'
+    Send-Ui $editor 0xB1 0 2
+    Send-Ui $editor 0x102 65
+    Assert-Ui ([CatUi]::Text($editor) -ceq 'Ai') 'Typing replaces a selected text range'
+    Send-Ui $menu 0x111 421
+    Assert-Ui ((Read-LatestNote) -ceq "N`tAi") 'Edited text is saved without the removed characters'
     $note = "猫 🐈 café & literal \n C:\notes\new`r`nSecond line`r`n" * 1000
     Edit-Ui $editor $note
     Start-Sleep -Milliseconds 1100
@@ -524,6 +581,44 @@ try {
     Assert-Ui (!$appProcess.HasExited) 'Pet reactions, dragging, and resizing keep the application running'
     [void][CatUi]::DestroyWindow($backdrop)
     $backdrop = [IntPtr]::Zero
+
+    # Exercise every actual display; geometry unit checks also cover displays
+    # left/above the primary when those layouts are not attached here.
+    foreach ($work in [CatUi]::WorkAreas()) {
+        Send-Ui $pet 0x111 105 # Normal width 200
+        foreach ($corner in @(@(0, 0), @(1, 0), @(0, 1), @(1, 1))) {
+            $startX = $work.left + 100
+            $startY = $work.top + 60
+            [void][CatUi]::SetWindowPos($pet, [IntPtr]::Zero, $startX, $startY, 0, 0, 0x14)
+            [void][CatUi]::SetCursorPos($startX + 100, $startY + 100)
+            Send-Ui $pet 0x201 1
+            [void][CatUi]::SetCursorPos($startX + 112, $startY + 100)
+            Send-Ui $pet 0x200 1
+            $cornerX = $(if ($corner[0]) { $work.right - 1 } else { $work.left })
+            $cornerY = $(if ($corner[1]) { $work.bottom - 1 } else { $work.top })
+            [void][CatUi]::SetCursorPos($cornerX, $cornerY)
+            Send-Ui $pet 0x200 1
+            Send-Ui $pet 0x200 1 # A repeated event must not snap to a different display
+            Send-Ui $pet 0x202
+            $placed = Get-UiRect $pet
+            $edgeX = $(if ($corner[0]) { $placed.right } else { $placed.left })
+            $edgeY = $(if ($corner[1]) { $placed.bottom } else { $placed.top })
+            $expectedX = $(if ($corner[0]) { $work.right } else { $work.left })
+            $expectedY = $(if ($corner[1]) { $work.bottom } else { $work.top })
+            Assert-Ui ($edgeX -eq $expectedX -and $edgeY -eq $expectedY) "Dropping reaches corner $($corner -join ',') of display at $($work.left),$($work.top)"
+        }
+        Send-Ui $pet 0x20A (120 -shl 16)
+        $resized = Get-UiRect $pet
+        Assert-Ui ($resized.left -ge $work.left -and $resized.top -ge $work.top -and $resized.right -le $work.right -and $resized.bottom -le $work.bottom) 'Resizing stays within the chosen display work area'
+        Send-Ui $pet 0x20A (-120 -shl 16)
+        $beforeRestart = Get-UiRect $pet
+        Send-Ui $pet 0x10
+        Assert-Ui ($appProcess.WaitForExit(5000)) 'Position is saved on close'
+        Start-TestApp
+        $pet = Find-Ui 'cocoBarWnd'
+        $afterRestart = Get-UiRect $pet
+        Assert-Ui ($beforeRestart.left -eq $afterRestart.left -and $beforeRestart.top -eq $afterRestart.top -and $beforeRestart.right -eq $afterRestart.right -and $beforeRestart.bottom -eq $afterRestart.bottom) 'Restart keeps the saved size and position on the selected display'
+    }
     [void][CatUi]::SetCursorPos($originalCursor.x, $originalCursor.y)
 
     Send-Ui (Find-Ui 'cocoBarWnd') 0x10

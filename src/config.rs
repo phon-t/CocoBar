@@ -103,8 +103,9 @@ pub(crate) fn load_config(path: &Path) -> ConfigData {
         color: 0,
         size_idx: 1,
         size_px: -1,
-        pos_x: -1,
-        pos_y: -1,
+        // Negative coordinates are valid on displays left/above the primary.
+        pos_x: i32::MIN,
+        pos_y: i32::MIN,
         always_on_top: true,
         cosmetic_bell: None,
         cosmetic_scarf: None,
@@ -401,6 +402,22 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn saved_positions_on_negative_display_coordinates_are_preserved() {
+        let dir = test_dir();
+        let path = dir.join("config.txt");
+        let mut data = load_config(&path);
+        assert_eq!((data.pos_x, data.pos_y), (i32::MIN, i32::MIN));
+        for position in [(-1700, 100), (150, -900), (-1, -1), (2200, 400)] {
+            data.pos_x = position.0;
+            data.pos_y = position.1;
+            save_config(&path, &data).unwrap();
+            let loaded = load_config(&path);
+            assert_eq!((loaded.pos_x, loaded.pos_y), position);
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
